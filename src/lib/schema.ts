@@ -83,6 +83,10 @@ export const repos = pgTable(
     error: text("error"),
     connectedAt: timestamp("connected_at").notNull().defaultNow(),
     lastGeneratedAt: timestamp("last_generated_at"),
+    // Generation row currently published for this repo. Plain uuid (no FK) to
+    // avoid a circular reference with generations.repo_id; integrity is
+    // enforced in app code and by ON DELETE cascade on generations.
+    publishedGenerationId: uuid("published_generation_id"),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (t) => [
@@ -91,7 +95,11 @@ export const repos = pgTable(
   ],
 );
 
-/** One doc-generation run per repo. Also feeds cost tracking (tokens_used). */
+/**
+ * One doc-generation run per repo. Also feeds cost tracking (tokens_used).
+ * The generated markdown lives on the row (draft until publishedAt is set);
+ * repos.published_generation_id points at the row currently shown publicly.
+ */
 export const generations = pgTable(
   "generations",
   {
@@ -105,6 +113,10 @@ export const generations = pgTable(
     startedAt: timestamp("started_at"),
     completedAt: timestamp("completed_at"),
     errorMessage: text("error_message"),
+    // Draft markdown produced by the run; null until processing succeeds.
+    markdown: text("markdown"),
+    // Set when the user approves the draft (diff preview → publish).
+    publishedAt: timestamp("published_at"),
   },
   (t) => [index("generations_repo_id_idx").on(t.repoId)],
 );

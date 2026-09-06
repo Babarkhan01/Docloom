@@ -45,7 +45,19 @@ export async function getAuthorizedUser() {
   const session = await getSession();
   if (!session) return null;
 
-  const [user] = await db.select().from(users).where(eq(users.id, session.userId)).limit(1);
+  // Serverless Postgres connections occasionally drop mid-query (ECONNRESET);
+  // one quick retry turns that transient blip into a self-heal instead of a
+  // spurious 500 on every authenticated request.
+  let user: typeof users.$inferSelect | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      [user] = await db.select().from(users).where(eq(users.id, session.userId)).limit(1);
+      break;
+    } catch (err) {
+      if (attempt === 1) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
   if (!user || user.sessionVersion !== session.v) return null;
 
   return { session, user };

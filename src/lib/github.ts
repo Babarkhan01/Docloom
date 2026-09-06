@@ -293,6 +293,63 @@ export async function getInstallationToken(installationId: number): Promise<stri
 }
 
 // ---------------------------------------------------------------------------
+// Repo content (read-only, via installation tokens)
+// Only ever fetched during a generation run; never persisted (project
+// principle: no source code is stored).
+// ---------------------------------------------------------------------------
+
+export type RepoTreeEntry = { path: string; type: "blob" | "tree"; size: number | null };
+
+/**
+ * Full recursive tree of a repo ref. Requires Contents: read on the app.
+ * `truncated` mirrors GitHub's flag — very large repos may be incomplete;
+ * callers must respect their own caps regardless.
+ */
+export async function fetchRepoTree(
+  installationId: number,
+  owner: string,
+  name: string,
+  ref: string,
+): Promise<{ entries: RepoTreeEntry[]; truncated: boolean }> {
+  const token = await getInstallationToken(installationId);
+  const data = await githubFetch<{
+    tree?: { path: string; type: string; size?: number }[];
+    truncated?: boolean;
+  }>(
+    `/repos/${owner}/${name}/git/trees/${encodeURIComponent(ref)}?recursive=1`,
+    token,
+  );
+  return {
+    entries: (data.tree ?? []).map((e) => ({
+      path: e.path,
+      type: e.type === "tree" ? "tree" : "blob",
+      size: e.size ?? null,
+    })),
+    truncated: data.truncated === true,
+  };
+}
+
+/** Fetch a single file's contents (utf-8) at a ref. Null if unreadable. */
+export async function fetchRepoBlob(
+  installationId: number,
+  owner: string,
+  name: string,
+  filePath: string,
+  ref: string,
+): Promise<string | null> {
+  const token = await getInstallationToken(installationId);
+  const data = await githubFetch<{ content?: string; encoding?: string }>(
+    `/repos/${owner}/${name}/contents/${filePath
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/")}?ref=${encodeURIComponent(ref)}`,
+    token,
+  );
+  if (!data.content || data.encoding !== "base64") return null;
+  return Buffer.from(data.content, "base64").toString("utf8");
+}
+
+// ---------------------------------------------------------------------------
 // User token lifecycle (DB-backed, refreshed when near expiry)
 // ---------------------------------------------------------------------------
 

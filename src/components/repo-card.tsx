@@ -1,7 +1,9 @@
+import Link from "next/link";
 import type { GenerationStatus } from "@/lib/schema";
 import { StatusBadge } from "./status-badge";
 
 export type RepoCardRepo = {
+  id: string;
   fullName: string;
   isPrivate: boolean;
   defaultBranch: string;
@@ -26,7 +28,9 @@ export function RepoCard({
     <article className="flex flex-col gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 transition-colors hover:border-zinc-700">
       <div className="flex items-start justify-between gap-3">
         <h2 className="font-mono text-sm font-semibold tracking-tight text-zinc-100">
-          {repo.fullName}
+          <Link href={`/dashboard/repos/${repo.id}`} className="hover:text-accent">
+            {repo.fullName}
+          </Link>
         </h2>
         <span
           className={`shrink-0 rounded-full px-2 py-0.5 font-mono text-[11px] uppercase tracking-wide ring-1 ring-inset ${

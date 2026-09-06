@@ -88,6 +88,7 @@ export default async function DashboardPage() {
               <RepoCard
                 key={r.id}
                 repo={{
+                  id: r.id,
                   fullName: r.githubRepoFullName,
                   isPrivate: r.isPrivate,
                   defaultBranch: r.defaultBranch,

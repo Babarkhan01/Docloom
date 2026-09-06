@@ -8,6 +8,13 @@
       "when": 1788640488343,
       "tag": "0000_sleepy_maria_hill",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788682705596,
+      "tag": "0001_careless_jubilee",
+      "breakpoints": true
     }
   ]
 }
