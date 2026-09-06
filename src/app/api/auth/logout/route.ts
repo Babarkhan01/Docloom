@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users } from "@/lib/schema";
 import { getAuthorizedUser, SESSION_COOKIE } from "@/lib/session";
+import { withRouteErrors } from "@/lib/route-wrapper";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +12,7 @@ export const dynamic = "force-dynamic";
  * session_version so all previously issued tokens are rejected by
  * getAuthorizedUser) and clear the cookie (tech spec §1).
  */
-export async function POST(request: NextRequest) {
+async function logoutHandler(request: NextRequest) {
   const authorized = await getAuthorizedUser();
   if (authorized) {
     await db
@@ -27,3 +28,5 @@ export async function POST(request: NextRequest) {
   response.cookies.set(SESSION_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
   return response;
 }
+
+export const POST = withRouteErrors("POST /api/auth/logout", logoutHandler);

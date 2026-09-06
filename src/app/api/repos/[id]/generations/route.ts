@@ -3,6 +3,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { generations, repos } from "@/lib/schema";
 import { getAuthorizedUser } from "@/lib/session";
+import { withRouteErrors } from "@/lib/route-wrapper";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +11,7 @@ export const dynamic = "force-dynamic";
  * GET /api/repos/[id]/generations — list generation runs for the caller's
  * repo (status list only; full markdown comes from the draft/published APIs).
  */
-export async function GET(
+async function listGenerationsHandler(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
@@ -43,3 +44,5 @@ export async function GET(
 
   return NextResponse.json({ generations: rows });
 }
+
+export const GET = withRouteErrors("GET /api/repos/[id]/generations", listGenerationsHandler);

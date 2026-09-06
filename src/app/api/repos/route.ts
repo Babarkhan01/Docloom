@@ -9,6 +9,7 @@ import {
 } from "@/lib/github";
 import { cleanupStaleBuckets, rateLimit } from "@/lib/rate-limit";
 import { getAuthorizedUser } from "@/lib/session";
+import { withRouteErrors } from "@/lib/route-wrapper";
 import { slugify } from "@/lib/slug";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +21,7 @@ const FULL_NAME_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 // generation status per repo (tech spec §2: status lives on `generations`).
 // ---------------------------------------------------------------------------
 
-export async function GET() {
+async function reposGetHandler() {
   const authorized = await getAuthorizedUser();
   if (!authorized) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -83,12 +84,14 @@ export async function GET() {
   });
 }
 
+export const GET = withRouteErrors("GET /api/repos", reposGetHandler);
+
 // ---------------------------------------------------------------------------
 // POST /api/repos — connect a repo by full name (e.g. "acme/api-server").
 // Stores metadata only; source code is never persisted (project principle).
 // ---------------------------------------------------------------------------
 
-export async function POST(request: NextRequest) {
+async function reposPostHandler(request: NextRequest) {
   const authorized = await getAuthorizedUser();
   if (!authorized) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -201,6 +204,8 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+export const POST = withRouteErrors("POST /api/repos", reposPostHandler);
 
 async function uniqueDocsSubdomain(base: string): Promise<string> {
   let candidate = base;

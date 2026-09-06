@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { generations, repos } from "@/lib/schema";
 import { getAuthorizedUser } from "@/lib/session";
+import { withRouteErrors } from "@/lib/route-wrapper";
 import { cleanupStaleBuckets, rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +13,7 @@ export const dynamic = "force-dynamic";
  * the repo's published docs (PRD: publish only after explicit approval of
  * the diff preview; never auto-publish).
  */
-export async function POST(
+async function publishHandler(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
@@ -60,3 +61,5 @@ export async function POST(
 
   return NextResponse.json({ published: true, generationId: gen.id });
 }
+
+export const POST = withRouteErrors("POST /api/repos/[id]/publish", publishHandler);

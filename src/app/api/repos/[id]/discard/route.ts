@@ -3,6 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { generations, repos } from "@/lib/schema";
 import { getAuthorizedUser } from "@/lib/session";
+import { withRouteErrors } from "@/lib/route-wrapper";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +12,7 @@ export const dynamic = "force-dynamic";
  * the caller's repo. A published generation is never deletable here; if it
  * is the current draft it is simply dropped from review.
  */
-export async function POST(
+async function discardHandler(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
@@ -37,3 +38,5 @@ export async function POST(
   await db.delete(generations).where(inArray(generations.id, deletable));
   return NextResponse.json({ discarded: deletable.length });
 }
+
+export const POST = withRouteErrors("POST /api/repos/[id]/discard", discardHandler);

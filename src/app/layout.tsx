@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { appUrl } from "@/lib/env";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -19,7 +20,9 @@ export const metadata: Metadata = {
   },
   description:
     "Connect a GitHub repo and get accurate, structured markdown docs for your API — AST-verified structure, AI-written descriptions, auto-hosted at a clean docs site.",
-  metadataBase: new URL(process.env.APP_URL ?? "http://localhost:3000"),
+  // appUrl() throws in production when APP_URL is unset — no silent
+  // localhost fallback in deployed environments.
+  metadataBase: new URL(appUrl()),
 };
 
 export default function RootLayout({
