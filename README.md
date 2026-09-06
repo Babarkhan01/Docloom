@@ -1,36 +1,173 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Docloom
 
-## Getting Started
+Docs that track your code. Connect a GitHub repo (public or private) and Docloom
+generates accurate, structured markdown docs for your API — AST-verified
+structure, AI-written descriptions, auto-hosted at a clean docs site.
 
-First, run the development server:
+**Current status — MVP stage 1 (built):** project scaffold, GitHub App OAuth
+login, session management, and the repo-connection screen (connect a repo →
+it appears on your dashboard). Parsing/generation is deliberately **not**
+started yet, per the build order in the PRD: *get one repo connecting and
+listing successfully before touching parsing/generation logic.*
+
+---
+
+## Stack
+
+- **Frontend + API:** Next.js 16 (App Router, Node runtime) + Tailwind CSS v4 — one app serves both
+- **Database:** Neon (serverless Postgres) via Drizzle ORM + `postgres` (postgres-js)
+- **Auth:** GitHub App OAuth 2.0 (authorization code flow, user-to-server tokens)
+- **Hosting (target):** Cloudflare Pages/Workers; staging + production from day one
+- **Sessions:** signed httpOnly JWT cookie (Jose, HS256)
+
+## Prerequisites
+
+- Node.js 20+ and npm
+- A GitHub account (to create the GitHub App)
+- A Neon account (or use the setup link in the next section)
+
+## 1. Create the GitHub App
+
+1. Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**.
+2. **GitHub App name:** `docloom-dev` (any unique name).
+3. **Homepage URL:** `http://localhost:3000` (your `APP_URL`).
+4. **Callback URL:** `http://localhost:3000/api/auth/github/callback`.
+5. **Permissions** (this is what makes access *read-only*):
+   - Repository → **Contents: Read-only**
+   - Repository → **Metadata: Read-only** (required, auto-granted)
+6. **Request user authorization (OAuth) during installation:** ✅ enabled —
+   this is what issues user-to-server tokens.
+7. **Webhook:** disable (Active: unchecked) — no webhooks needed for the MVP.
+8. Save, then note down:
+   - **App ID** → `GITHUB_APP_ID`
+   - **Client ID** → `GITHUB_CLIENT_ID`
+   - **Generate a client secret** → `GITHUB_CLIENT_SECRET`
+   - **Generate a private key** (downloads a `.pem`) → `GITHUB_PRIVATE_KEY`
+     (paste the PEM contents into the env var, or base64-encode it first).
+
+> **Why a GitHub App and not a classic OAuth App?** Classic OAuth's `repo`
+> scope needed for private repos is read+write at the platform level. A GitHub
+> App grants strictly read-only Contents/Metadata permissions — matching the
+> "read-only repo access" principle in the PRD/tech spec.
+
+> **Install the app on your repos:** after signing in, connect a repo from the
+> dashboard. Only repos the app is installed on appear in the connect list.
+
+## 2. Create the Neon database
+
+1. [Create a Neon project](https://console.neon.tech) (free tier is fine for
+   the MVP).
+2. Copy the **connection string** from *Connection Details* (pooled connection
+   works; unpooled also fine at this scale) → `DATABASE_URL`.
+3. Apply the schema (migration is already generated in `drizzle/`):
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run db:migrate   # reads DATABASE_URL from .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 3. Configure environment
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+cp .env.example .env.local
+# fill in: GITHUB_APP_ID, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET,
+# GITHUB_PRIVATE_KEY, DATABASE_URL
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+`SESSION_SECRET` and `ENCRYPTION_KEY` already have dev values in `.env.local`;
+generate fresh ones for staging/production (`openssl rand -base64 32`).
 
-## Learn More
+Staging and production use their own env files (`dotenv-cli`):
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+cp .env.staging.example .env.staging      # staging config — separate DB, separate GitHub App
+cp .env.production.example .env.production
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 4. Run
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npm run dev                # local (uses .env.local)
+npm run dev:staging        # staging (uses .env.staging)
+npm run build:production && npm run start:production
+```
 
-## Deploy on Vercel
+Other scripts:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Script | Purpose |
+|---|---|
+| `npm run db:generate` | Generate a new migration from `src/lib/schema.ts` |
+| `npm run db:migrate` / `db:migrate:staging` | Apply migrations (dev/staging) |
+| `npm run db:studio` | Drizzle Studio for inspecting the DB |
+| `npm run lint` | ESLint |
+| `npm run build` | Production build + typecheck |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Project structure
+
+```
+src/
+  proxy.ts                    # Auth gate + sliding session refresh (Next 16 proxy)
+  app/
+    page.tsx                  # Landing page (hero, how-it-works, FAQ)
+    login/page.tsx            # "Continue with GitHub" (OAuth entry)
+    dashboard/page.tsx        # Connected repo list + status
+    api/
+      auth/github/route.ts    # Start OAuth (state cookie → GitHub)
+      auth/github/callback/route.ts  # Exchange code, upsert user, issue session
+      auth/logout/route.ts    # Bump session_version + clear cookie
+      repos/route.ts          # GET connected repos, POST connect
+      repos/available/route.ts# GitHub repos available to connect
+  lib/
+    schema.ts                 # Drizzle schema (spec §2: users/repos/generations/usage_counters)
+    db.ts                     # Lazy postgres + drizzle singleton
+    github.ts                 # App JWT, OAuth exchange/refresh, repo listing, install tokens
+    session.ts / session-core.ts  # Cookie helpers + pure jose token logic
+    crypto.ts                 # AES-256-GCM token encryption at rest
+    rate-limit.ts             # In-memory limiter for public endpoints
+  components/                 # Dashboard UI (modal, cards, badges)
+drizzle/                      # SQL migrations
+```
+
+## Architecture & security model
+
+Follows the Technical Architecture & Security Spec. Highlights:
+
+- **Auth:** GitHub OAuth authorization-code flow; the GitHub token is exchanged
+  and stored server-side only (encrypted at rest with AES-256-GCM) — the
+  browser only ever holds Docloom's own signed session cookie.
+- **Sessions:** short-lived (24h) JWT with sliding refresh in `proxy.ts`
+  (re-issued past 12h). Logout bumps `users.session_version`, which invalidates
+  all previously issued tokens server-side — the DB check runs on every API
+  call (`getAuthorizedUser`), never trusting the proxy or the client alone.
+- **Repo access is per-user, enforced server-side** on every request
+  (`repos.user_id` is always checked against the session).
+- **Read-only GitHub access:** Contents + Metadata, read-only; contents are
+  only ever fetched through short-lived installation tokens during a processing
+  session. **No source code is stored** — the schema has no code table.
+- **Rate limiting** on all public endpoints (OAuth login/callback) and on
+  repo endpoints, keyed per user.
+- **Security headers** (CSP, HSTS in prod, `X-Frame-Options`, nosniff,
+  referrer policy) set in `next.config.ts`; `robots.txt` blocks
+  `/dashboard`, `/login`, `/api`.
+- **Secrets:** everything via environment variables — nothing hardcoded,
+  nothing committed (`.env*` is gitignored; only `.env.example` and the
+  staging/production templates are committed).
+
+## What's next (in order)
+
+1. **AST parsing** of the connected repo (TypeScript compiler API): routes,
+   function signatures, param/return types — deterministic facts, never from
+   the LLM.
+2. **Generation engine** with AI-written descriptions over the parsed
+   structure → structured markdown, recorded in `generations`.
+3. **Hosted docs** at `{docsSubdomain}.docloom.app` (separate worker/pages
+   project) + **regenerate button with diff preview**.
+4. **Quotas & spend limits BEFORE generation ships** (tech spec §4): per-plan
+   quotas via `usage_counters`, daily per-user caps, global spend ceiling,
+   token cost tracking per generation, circuit breaker.
+5. Monitoring (Sentry + UptimeRobot), backups, then launch readiness.
+
+## License / legal
+
+Terms & Privacy drafts live in the planning docs and must be finalized and
+reviewed before launch (see `~/Desktop/~:docloom/05-…` and `06-…`).
