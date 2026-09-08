@@ -15,6 +15,20 @@
       "when": 1788682705596,
       "tag": "0001_careless_jubilee",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788697097132,
+      "tag": "0002_keen_bromley",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788708969506,
+      "tag": "0003_medical_phalanx",
+      "breakpoints": true
     }
   ]
 }

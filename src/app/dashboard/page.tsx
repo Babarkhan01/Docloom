@@ -8,6 +8,8 @@ import { getAuthorizedUser } from "@/lib/session";
 import { ConnectRepoModal } from "@/components/connect-repo-modal";
 import { RepoCard } from "@/components/repo-card";
 import { SignOutButton } from "@/components/sign-out-button";
+import { UpgradeButton } from "@/components/upgrade-button";
+import { dailyGenerationLimitFor, effectivePlan, type Plan } from "@/lib/billing";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +27,9 @@ export default async function DashboardPage() {
   const genRows = ids.length
     ? await db.select().from(generations).where(inArray(generations.repoId, ids))
     : [];
+
+  const plan: Plan = effectivePlan(authorized.user);
+  const planLimit = dailyGenerationLimitFor(plan);
 
   const latestByRepo = new Map<string, (typeof genRows)[number]>();
   for (const g of genRows) {
@@ -58,6 +63,13 @@ export default async function DashboardPage() {
           <span className="font-mono text-sm text-zinc-400">
             {authorized.user.login}
           </span>
+          <span
+            className="rounded-md border border-zinc-800 px-2 py-1 font-mono text-xs text-zinc-500"
+            title={`Daily generation cap: ${planLimit}`}
+          >
+            {plan}
+          </span>
+          <UpgradeButton />
           <SignOutButton />
         </div>
       </header>

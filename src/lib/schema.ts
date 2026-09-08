@@ -45,6 +45,13 @@ export const users = pgTable(
     avatarUrl: text("avatar_url"),
     plan: text("plan").notNull().default("free"), // free / starter / team
     dodoCustomerId: text("dodo_customer_id"), // Dodo Payments customer reference
+    // Dodo subscription lifecycle. subscriptionStatus mirrors Dodo's statuses
+    // (active / on_hold / cancelled / expired / failed); null = never subscribed.
+    // on_hold starts a 7-day grace window (billing/grace.ts) before downgrade.
+    dodoSubscriptionId: text("dodo_subscription_id"),
+    dodoSubscriptionStatus: text("dodo_subscription_status"),
+    // When a paid subscription entered on_hold — drives the grace-window expiry.
+    dodoGraceUntil: timestamp("dodo_grace_until"),
     // Bumped on logout so previously issued session tokens are invalidated
     // server-side (tech spec §1).
     sessionVersion: integer("session_version").notNull().default(0),
@@ -137,6 +144,17 @@ export const usageCounters = pgTable(
   },
   (t) => [primaryKey({ columns: [t.userId, t.periodStart] })],
 );
+
+/**
+ * Processed Dodo webhook event ids (idempotency). Dodo retries deliveries on
+ * failure and may send duplicates — inserting the event id with
+ * onConflictDoNothing before processing guarantees each event applies once.
+ */
+export const webhookEvents = pgTable("webhook_events", {
+  id: text("id").primaryKey(), // webhook-id header / Dodo event id
+  eventType: text("event_type").notNull(),
+  receivedAt: timestamp("received_at").notNull().defaultNow(),
+});
 
 export type RepoStatus = (typeof repoStatus.enumValues)[number];
 export type GenerationStatus = (typeof generationStatus.enumValues)[number];

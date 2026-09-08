@@ -1,10 +1,11 @@
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "./db";
-import { generations, repos, usageCounters } from "./schema";
+import { generations, repos, usageCounters, users } from "./schema";
 import { fetchRepoBlob, fetchRepoTree } from "./github";
 import { parseRouteFiles } from "./route-parser";
 import { aiEnabled, describeRoutes } from "./ai";
 import { buildApiMarkdown } from "./docs";
+import { dailyGenerationLimit } from "./billing";
 
 /**
  * Generation pipeline: fetch (read-only installation token) → AST parse →
@@ -19,22 +20,30 @@ export type GenerationOutcome =
   | { ok: true; generationId: string; endpointCount: number; tokensUsed: number; aiUsed: boolean }
   | { ok: false; status: number; error: string; message: string };
 
-/** Free-plan daily cap (spec §4: limits must exist before LLM spend). */
-export function dailyGenerationLimit(): number {
-  return Number(process.env.DOCLOOM_DAILY_GENERATION_LIMIT ?? 5);
-}
-
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Daily cap for this user — plan-aware (Free 5 / Starter 25 / Team 100) via billing.ts. */
 async function quotaState(userId: string) {
   const [row] = await db
     .select()
     .from(usageCounters)
     .where(and(eq(usageCounters.userId, userId), eq(usageCounters.periodStart, today())))
     .limit(1);
-  return { used: row?.generationsCount ?? 0, limit: dailyGenerationLimit() };
+  const [user] = await db
+    .select({ plan: users.plan, dodoSubscriptionStatus: users.dodoSubscriptionStatus, dodoGraceUntil: users.dodoGraceUntil })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return {
+    used: row?.generationsCount ?? 0,
+    limit: dailyGenerationLimit({
+      plan: user?.plan ?? null,
+      dodoSubscriptionStatus: user?.dodoSubscriptionStatus ?? null,
+      dodoGraceUntil: user?.dodoGraceUntil ?? null,
+    }),
+  };
 }
 
 async function bumpQuota(userId: string, tokens: number): Promise<void> {
