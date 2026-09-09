@@ -18,11 +18,15 @@ const globalForDb = globalThis as unknown as {
 // first query, and getEnv() fails loudly there if the URL is missing.
 function client() {
   if (!globalForDb.dbClient) {
-    globalForDb.dbClient = postgres(getEnv("DATABASE_URL"), {
-      max: 10,
-      // Neon requires SSL
-      ssl: "require",
-    });
+  globalForDb.dbClient = postgres(getEnv("DATABASE_URL"), {
+    max: 10,
+    // Neon requires SSL
+    ssl: "require",
+    // Required for Neon's pooled (pgbouncer transaction-mode) endpoint — the
+    // production DATABASE_URL uses -pooler hosts, which reject named prepared
+    // statements. Negligible overhead vs. re-connects under pooler churn.
+    prepare: false,
+  });
   }
   return globalForDb.dbClient;
 }

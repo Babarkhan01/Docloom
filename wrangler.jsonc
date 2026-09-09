@@ -1,0 +1,20 @@
+// Cloudflare Workers config for Docloom (Next.js via @opennextjs/cloudflare).
+// Deploy with: npm run deploy  (wrangler deploy)
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "docloom",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-08-25",
+  // nodejs_compat is required by the OpenNext worker and our node:crypto usage
+  // (session signing, token encryption, Dodo webhook HMAC verification).
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    // Static Next.js assets are emitted here by the OpenNext build and served
+    // directly by Cloudflare's assets layer; everything else hits the worker.
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  }
+}
