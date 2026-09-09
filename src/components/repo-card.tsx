@@ -10,6 +10,8 @@ export type RepoCardRepo = {
   docsSubdomain: string;
   status: string;
   connectedAt: Date;
+  /** Published docs exist → the public /docs/{subdomain} page is live. */
+  isHosted: boolean;
 };
 
 export type RepoCardGeneration = {
@@ -47,8 +49,19 @@ export function RepoCard({
         <div className="flex justify-between gap-3">
           <dt className="text-zinc-500">Docs</dt>
           <dd className="font-mono text-zinc-400">
-            {repo.docsSubdomain}.docloom.app{" "}
-            <span className="text-zinc-600">· not hosted yet</span>
+            {repo.isHosted ? (
+              <>
+                <Link href={`/docs/${repo.docsSubdomain}`} className="hover:text-accent">
+                  /docs/{repo.docsSubdomain}
+                </Link>{" "}
+                <span className="text-emerald-500">· hosted</span>
+              </>
+            ) : (
+              <>
+                /docs/{repo.docsSubdomain}{" "}
+                <span className="text-zinc-600">· not hosted yet</span>
+              </>
+            )}
           </dd>
         </div>
         <div className="flex justify-between gap-3">

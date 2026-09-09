@@ -27,6 +27,7 @@ export default async function DashboardPage() {
   const genRows = ids.length
     ? await db.select().from(generations).where(inArray(generations.repoId, ids))
     : [];
+  const hostedIds = new Set(userRepos.filter((r) => r.publishedGenerationId).map((r) => r.id));
 
   const plan: Plan = effectivePlan(authorized.user);
   const planLimit = dailyGenerationLimitFor(plan);
@@ -107,6 +108,7 @@ export default async function DashboardPage() {
                   docsSubdomain: r.docsSubdomain,
                   status: r.status,
                   connectedAt: r.connectedAt,
+                  isHosted: hostedIds.has(r.id),
                 }}
                 lastGeneration={
                   gen

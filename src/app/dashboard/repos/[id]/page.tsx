@@ -102,8 +102,21 @@ export default async function RepoDetailPage({ params }: { params: Promise<{ id:
             {repo.githubRepoFullName}
           </h1>
           <p className="mt-1 text-sm text-zinc-500">
-            branch <span className="font-mono text-zinc-400">{repo.defaultBranch}</span> · docs at{" "}
-            <span className="font-mono text-zinc-400">{repo.docsSubdomain}.docloom.app</span> · not hosted yet
+            branch <span className="font-mono text-zinc-400">{repo.defaultBranch}</span> ·{" "}
+            {repo.publishedGenerationId ? (
+              <>
+                docs at{" "}
+                <Link href={`/docs/${repo.docsSubdomain}`} className="font-mono text-zinc-300 hover:text-accent">
+                  /docs/{repo.docsSubdomain}
+                </Link>{" "}
+                <span className="text-emerald-500">· hosted</span>
+              </>
+            ) : (
+              <>
+                docs at <span className="font-mono text-zinc-400">/docs/{repo.docsSubdomain}</span>{" "}
+                <span className="text-zinc-600">· not hosted yet — publish to go live</span>
+              </>
+            )}
           </p>
         </div>
         <GenerationActions
