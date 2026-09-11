@@ -54,7 +54,13 @@ export function RepoCard({
                 <Link href={`/docs/${repo.docsSubdomain}`} className="hover:text-accent">
                   /docs/{repo.docsSubdomain}
                 </Link>{" "}
-                <span className="text-emerald-500">· hosted</span>
+                <Link
+                  href={`/docs/${repo.docsSubdomain}`}
+                  className="text-emerald-500 hover:text-emerald-400 hover:underline"
+                  title="Open live docs"
+                >
+                  · hosted
+                </Link>
               </>
             ) : (
               <>
