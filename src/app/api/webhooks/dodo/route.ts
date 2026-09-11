@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { eq } from "drizzle-orm";
-import { getEnv } from "@/lib/env";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users, webhookEvents } from "@/lib/schema";
 import { withRouteErrors } from "@/lib/route-wrapper";
-import { getCustomerEmail } from "@/lib/dodo";
+import { getCustomerEmail, listCustomerSubscriptions, planForProduct } from "@/lib/dodo";
 
 export const dynamic = "force-dynamic";
 
@@ -82,67 +81,6 @@ type WebhookBody = {
   data?: SubscriptionPayload;
 };
 
-/**
- * Map a Dodo product id back to the Docloom plan it purchases. Falls back to
- * the event's plan_id when product_id is absent, since both reference the
- * product/plan configured in the Dodo dashboard.
- */
-function planForProduct(
-  productId: string | undefined,
-  planId: string | undefined,
-): "starter" | "team" | null {
-  for (const id of [productId, planId]) {
-    if (!id) continue;
-    if (id === process.env.DODO_STARTER_PRODUCT_ID) return "starter";
-    if (id === process.env.DODO_TEAM_PRODUCT_ID) return "team";
-  }
-  return null;
-}
-
-/**
- * Number of the user's OTHER subscriptions that are still live in Dodo
- * (excluding excludeSubscriptionId, in any non-terminal state: active,
- * on_hold, past_due, …). Powers the survivor check: a cancelled subscription
- * only downgrades when nothing live remains, so cancelling an old duplicate
- * never strips a plan the customer still holds. A list failure (null) defers
- * the cancel instead — the handler 500s, Dodo retries, and the check re-runs
- * once Dodo answers again. Fail closed: an outage never strips paid access.
- */
-async function countOtherActiveSubs(
-  customerId: string,
-  excludeSubscriptionId: string | undefined,
-): Promise<number | null> {
-  const terminal = new Set(["cancelled", "expired", "failed"]);
-  try {
-    const base = process.env.DODO_MODE === "live" ? "https://live.dodopayments.com" : "https://test.dodopayments.com";
-    const res = await fetch(`${base}/subscriptions?limit=100`, {
-      headers: { Authorization: `Bearer ${getEnv("DODO_API_KEY")}` },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) {
-      console.error(`Dodo subscription list failed: HTTP ${res.status}`);
-      return null;
-    }
-    const data = (await res.json()) as {
-      items?: Array<{
-        status?: string;
-        customer?: { customer_id?: string };
-        subscription_id?: string;
-      }>;
-    };
-    const subs = data.items ?? [];
-    return subs.filter(
-      (s) =>
-        s.customer?.customer_id === customerId &&
-        s.subscription_id !== excludeSubscriptionId &&
-        !terminal.has(s.status ?? "active"),
-    ).length;
-  } catch (err) {
-    console.error("Dodo subscription list failed:", err);
-    return null;
-  }
-}
-
 async function applySubscriptionState(opts: {
   event: string;
   sub: SubscriptionPayload;
@@ -181,7 +119,6 @@ async function applySubscriptionState(opts: {
   }
   if (!userRow) return { handled: false, note: "no matching user for event" };
   const userId = userRow.id;
-  const survivorSubs = await countOtherActiveSubs(sub.customer_id ?? "", sub.subscription_id);
 
   const graceUntil = () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // PRD policy: 7-day grace
 
@@ -212,17 +149,32 @@ async function applySubscriptionState(opts: {
       }
       if (status === "cancelled" || status === "expired") {
         // Cancellation arrives via subscription.updated (no dedicated event).
-        // Only downgrade when no other active subscription survives — the
+        // Only downgrade when no other live subscription survives — the
         // customer may hold several subs (one per plan, test duplicates, …).
-        if (survivorSubs === null) {
+        const liveSubs = await listCustomerSubscriptions(sub.customer_id ?? "");
+        if (liveSubs === null) {
           // Dodo list unavailable — bail so the handler 500s, drops the
           // idempotency row, and Dodo's retries re-apply this cancel later.
           throw new Error("dodo_subscription_list_unavailable — cancel deferred to retry");
         }
-        if (survivorSubs > 0) {
+        const survivors = liveSubs.filter((s) => s.subscription_id && s.subscription_id !== sub.subscription_id);
+        if (survivors.length > 0) {
+          // Keep paid access; re-point our subscription reference at a
+          // surviving sub when the cancelled one is the row we track (prefer
+          // an active survivor). The row is only ever pointed at a live sub.
+          const survivor = survivors.find((s) => s.status === "active") ?? survivors[0];
+          await db
+            .update(users)
+            .set({
+              dodoSubscriptionId: survivor.subscription_id ?? null,
+              dodoSubscriptionStatus: "active",
+              dodoGraceUntil: null,
+              updatedAt: new Date(),
+            })
+            .where(and(eq(users.id, userId), eq(users.dodoSubscriptionId, sub.subscription_id ?? "")));
           return {
             handled: true,
-            note: `${status} — kept current plan (${survivorSubs} other active sub(s))`,
+            note: `${status} — kept plan (${survivors.length} other live sub(s), tracking ${survivor.subscription_id})`,
           };
         }
         await db
@@ -254,14 +206,26 @@ async function applySubscriptionState(opts: {
     case "subscription.cancelled":
     case "subscription.expired": {
       // Same survivor check as the updated/cancelled path above.
-      if (survivorSubs === null) {
+      const liveSubs = await listCustomerSubscriptions(sub.customer_id ?? "");
+      if (liveSubs === null) {
         // Dodo list unavailable — fail closed, let Dodo's retry re-apply.
         throw new Error("dodo_subscription_list_unavailable — cancel deferred to retry");
       }
-      if (survivorSubs > 0) {
+      const survivors = liveSubs.filter((s) => s.subscription_id && s.subscription_id !== sub.subscription_id);
+      if (survivors.length > 0) {
+        const survivor = survivors.find((s) => s.status === "active") ?? survivors[0];
+        await db
+          .update(users)
+          .set({
+            dodoSubscriptionId: survivor.subscription_id ?? null,
+            dodoSubscriptionStatus: "active",
+            dodoGraceUntil: null,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(users.id, userId), eq(users.dodoSubscriptionId, sub.subscription_id ?? "")));
         return {
           handled: true,
-          note: `${event} — kept current plan (${survivorSubs} other active sub(s))`,
+          note: `${event} — kept plan (${survivors.length} other live sub(s), tracking ${survivor.subscription_id})`,
         };
       }
       await db

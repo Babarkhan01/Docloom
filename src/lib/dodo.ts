@@ -92,3 +92,74 @@ export async function getCustomerEmail(customerId: string): Promise<string | nul
   const data = (await res.json()) as { email?: string };
   return data.email ?? null;
 }
+
+/** Terminal subscription statuses — a cancelled/expired/failed sub grants nothing. */
+export function isTerminalStatus(status: string | undefined): boolean {
+  return status === "cancelled" || status === "expired" || status === "failed";
+}
+
+/**
+ * Map a Dodo product/plan id to the Docloom plan it purchases. Shared by the
+ * webhook handler and the resync endpoint. Falls back to the plan_id since
+ * both reference the product/plan configured in the Dodo dashboard. Returns
+ * null for unknown products.
+ */
+export function planForProduct(
+  productId: string | undefined,
+  planId: string | undefined,
+): "starter" | "team" | null {
+  for (const id of [productId, planId]) {
+    if (!id) continue;
+    if (id === process.env.DODO_STARTER_PRODUCT_ID) return "starter";
+    if (id === process.env.DODO_TEAM_PRODUCT_ID) return "team";
+  }
+  return null;
+}
+
+export type DodoSubscriptionSummary = {
+  subscription_id: string | undefined;
+  status: string | undefined;
+  product_id: string | undefined;
+  plan_id: string | undefined;
+};
+
+/**
+ * List a Dodo customer's subscriptions (all statuses, first page of 100 —
+ * far beyond any real customer's count). Returns null when the API is
+ * unreachable or errors — callers must treat null as "unknown" and fail
+ * closed: never strip paid access because Dodo could not answer.
+ */
+export async function listCustomerSubscriptions(
+  customerId: string,
+): Promise<DodoSubscriptionSummary[] | null> {
+  try {
+    const res = await fetch(`${apiBase()}/subscriptions?limit=100`, {
+      headers: { Authorization: `Bearer ${getEnv("DODO_API_KEY")}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      console.error(`Dodo subscription list failed: HTTP ${res.status}`);
+      return null;
+    }
+    const data = (await res.json()) as {
+      items?: Array<{
+        subscription_id?: string;
+        status?: string;
+        product_id?: string;
+        plan_id?: string;
+        customer?: { customer_id?: string };
+      }>;
+    };
+    return (data.items ?? [])
+      .filter((s) => s.customer?.customer_id === customerId)
+      .map((s) => ({
+        subscription_id: s.subscription_id,
+        status: s.status,
+        product_id: s.product_id,
+        plan_id: s.plan_id,
+      }));
+  } catch (err) {
+    console.error("Dodo subscription list failed:", err);
+    return null;
+  }
+}
