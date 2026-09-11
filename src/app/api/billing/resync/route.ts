@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { getAuthorizedUser } from "@/lib/session";
 import { db } from "@/lib/db";
-import { users } from "@/lib/schema";
+import { users, webhookEvents } from "@/lib/schema";
 import { withRouteErrors } from "@/lib/route-wrapper";
 import {
   dodoEnabled,
@@ -101,7 +101,27 @@ async function resyncHandler(): Promise<NextResponse> {
     .where(eq(users.id, user.id))
     .limit(1);
 
-  return NextResponse.json({ resynced: true, ...row });
+  // Observability: a resync call doubles as a billing health check. Echo what
+  // Dodo currently reports per subscription (with THIS deployment's plan
+  // mapping applied — proves the product-id env vars resolve here) plus the
+  // most recent processed webhook events (types + timestamps only, no ids —
+  // enough to confirm deliveries without exposing identifiers).
+  const recentEvents = await db
+    .select({ eventType: webhookEvents.eventType, receivedAt: webhookEvents.receivedAt })
+    .from(webhookEvents)
+    .orderBy(desc(webhookEvents.receivedAt))
+    .limit(5);
+
+  return NextResponse.json({
+    resynced: true,
+    ...row,
+    dodoLiveSubs: subs.map((s) => ({
+      subscriptionId: s.subscription_id,
+      status: s.status,
+      plan: planForProduct(s.product_id, s.plan_id),
+    })),
+    recentWebhookEvents: recentEvents,
+  });
 }
 
 export const POST = withRouteErrors("POST /api/billing/resync", resyncHandler);
