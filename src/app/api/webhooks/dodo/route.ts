@@ -4,7 +4,12 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users, webhookEvents } from "@/lib/schema";
 import { withRouteErrors } from "@/lib/route-wrapper";
-import { getCustomerEmail, listCustomerSubscriptions, planForProduct } from "@/lib/dodo";
+import {
+  getCustomerEmail,
+  listCustomerSubscriptions,
+  planForProduct,
+  type DodoSubscriptionSummary,
+} from "@/lib/dodo";
 
 export const dynamic = "force-dynamic";
 
@@ -80,6 +85,42 @@ type WebhookBody = {
   type?: string;
   data?: SubscriptionPayload;
 };
+
+/**
+ * Keep-path for a cancelled sub that has live survivors: re-point the tracked
+ * subscription at the best survivor and align the plan to it. Preference:
+ * active Team > active Starter > any active > first live — mirroring the
+ * resync endpoint's tier logic, so the user is never left below what an
+ * active survivor pays for (cancelling a Starter test sub while a Team sub
+ * is live lands back on team, never starter). Plan is set only from an
+ * active survivor's mapped product; an unknown product keeps the current
+ * plan. The row is only rewritten when it was tracking the cancelled sub.
+ */
+async function keepBestSurvivor(
+  userId: string,
+  cancelledSubId: string | undefined,
+  survivors: DodoSubscriptionSummary[],
+): Promise<string> {
+  const tier = (s: DodoSubscriptionSummary) =>
+    s.status === "active" ? planForProduct(s.product_id, s.plan_id) : null;
+  const best =
+    survivors.find((s) => tier(s) === "team") ??
+    survivors.find((s) => tier(s) === "starter") ??
+    survivors.find((s) => s.status === "active") ??
+    survivors[0];
+  const plan = best ? tier(best) : null;
+  await db
+    .update(users)
+    .set({
+      dodoSubscriptionId: best?.subscription_id ?? null,
+      dodoSubscriptionStatus: best?.status ?? "active",
+      dodoGraceUntil: null,
+      ...(plan ? { plan } : {}),
+      updatedAt: new Date(),
+    })
+    .where(and(eq(users.id, userId), eq(users.dodoSubscriptionId, cancelledSubId ?? "")));
+  return `kept plan (tracking ${best?.subscription_id ?? "?"}${plan ? `, plan=${plan}` : ""})`;
+}
 
 async function applySubscriptionState(opts: {
   event: string;
@@ -159,23 +200,8 @@ async function applySubscriptionState(opts: {
         }
         const survivors = liveSubs.filter((s) => s.subscription_id && s.subscription_id !== sub.subscription_id);
         if (survivors.length > 0) {
-          // Keep paid access; re-point our subscription reference at a
-          // surviving sub when the cancelled one is the row we track (prefer
-          // an active survivor). The row is only ever pointed at a live sub.
-          const survivor = survivors.find((s) => s.status === "active") ?? survivors[0];
-          await db
-            .update(users)
-            .set({
-              dodoSubscriptionId: survivor.subscription_id ?? null,
-              dodoSubscriptionStatus: "active",
-              dodoGraceUntil: null,
-              updatedAt: new Date(),
-            })
-            .where(and(eq(users.id, userId), eq(users.dodoSubscriptionId, sub.subscription_id ?? "")));
-          return {
-            handled: true,
-            note: `${status} — kept plan (${survivors.length} other live sub(s), tracking ${survivor.subscription_id})`,
-          };
+          const note = await keepBestSurvivor(userId, sub.subscription_id, survivors);
+          return { handled: true, note: `${status} — ${note}` };
         }
         await db
           .update(users)
@@ -213,20 +239,8 @@ async function applySubscriptionState(opts: {
       }
       const survivors = liveSubs.filter((s) => s.subscription_id && s.subscription_id !== sub.subscription_id);
       if (survivors.length > 0) {
-        const survivor = survivors.find((s) => s.status === "active") ?? survivors[0];
-        await db
-          .update(users)
-          .set({
-            dodoSubscriptionId: survivor.subscription_id ?? null,
-            dodoSubscriptionStatus: "active",
-            dodoGraceUntil: null,
-            updatedAt: new Date(),
-          })
-          .where(and(eq(users.id, userId), eq(users.dodoSubscriptionId, sub.subscription_id ?? "")));
-        return {
-          handled: true,
-          note: `${event} — kept plan (${survivors.length} other live sub(s), tracking ${survivor.subscription_id})`,
-        };
+        const note = await keepBestSurvivor(userId, sub.subscription_id, survivors);
+        return { handled: true, note: `${event} — ${note}` };
       }
       await db
         .update(users)
