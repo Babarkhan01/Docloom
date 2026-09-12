@@ -1,7 +1,7 @@
 # End User License Agreement (EULA) — Docloom
 
-**Effective Date:** [Insert Date]
-**Last Updated:** [Insert Date]
+**Effective Date:** September 12, 2026
+**Last Updated:** September 12, 2026
 
 *This document is a template drafted for Docloom and does not constitute legal advice. Have it reviewed by a qualified attorney before publishing. Note: because Docloom is delivered as a hosted web service (SaaS) rather than installed software, much of what a traditional EULA covers is already addressed in the Terms and Conditions — this EULA specifically governs the license granted for using the Service's software, interfaces, and any generated output, and should be read alongside the Terms and Conditions and Privacy Policy, not as a replacement for them.*
 
@@ -81,5 +81,5 @@ This EULA, together with the Terms and Conditions and Privacy Policy, constitute
 
 Questions about this EULA can be directed to:
 
-**Email:** [insert support/contact email]
+**Email:** docloom.help@gmail.com
 **Website:** https://docloom.dev

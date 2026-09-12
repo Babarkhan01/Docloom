@@ -1,7 +1,7 @@
 # Privacy Policy — Docloom
 
-**Effective Date:** [Insert Date]
-**Last Updated:** [Insert Date]
+**Effective Date:** September 12, 2026
+**Last Updated:** September 12, 2026
 
 *This document is a template drafted for Docloom ("Docloom," "we," "us," or "our"). It is provided for informational purposes and does not constitute legal advice. Before publishing this policy, have it reviewed by a qualified attorney familiar with data protection law in the jurisdictions where your users are located (particularly GDPR if you serve EU/UK users, and CCPA/CPRA if you serve California residents).*
 
@@ -116,5 +116,5 @@ We may update this Privacy Policy from time to time. Material changes will be co
 
 If you have questions about this Privacy Policy or wish to exercise any of your data rights, contact us at:
 
-**Email:** [insert support/contact email]
+**Email:** docloom.help@gmail.com
 **Website:** https://docloom.dev

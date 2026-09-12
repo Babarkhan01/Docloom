@@ -1,7 +1,7 @@
 # Cookie Policy — Docloom
 
-**Effective Date:** [Insert Date]
-**Last Updated:** [Insert Date]
+**Effective Date:** September 12, 2026
+**Last Updated:** September 12, 2026
 
 *This document is a template drafted for Docloom and does not constitute legal advice. Have it reviewed by a qualified attorney before publishing, particularly if you serve users in the EU/UK (where ePrivacy/GDPR rules require consent for non-essential cookies) or California (CCPA/CPRA cookie disclosure requirements).*
 
@@ -60,5 +60,5 @@ We may update this Cookie Policy from time to time to reflect changes in the coo
 
 Questions about this Cookie Policy can be directed to:
 
-**Email:** [insert support/contact email]
+**Email:** docloom.help@gmail.com
 **Website:** https://docloom.dev

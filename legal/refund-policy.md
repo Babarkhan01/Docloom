@@ -1,7 +1,7 @@
 # Refund Policy — Docloom
 
-**Effective Date:** [Insert Date]
-**Last Updated:** [Insert Date]
+**Effective Date:** September 12, 2026
+**Last Updated:** September 12, 2026
 
 *This document is a template drafted for Docloom and does not constitute legal advice. Refund obligations vary significantly by jurisdiction and payment processor rules — have this reviewed by a qualified attorney, and confirm consistency with Dodo Payments' own merchant-of-record refund handling before publishing.*
 
@@ -64,5 +64,5 @@ We may update this Refund Policy from time to time. Material changes will be ref
 
 Refund requests and questions about this policy can be directed to:
 
-**Email:** [insert support/contact email]
+**Email:** docloom.help@gmail.com
 **Website:** https://docloom.dev

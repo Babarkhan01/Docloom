@@ -1,7 +1,7 @@
 # Terms and Conditions — Docloom
 
-**Effective Date:** [Insert Date]
-**Last Updated:** [Insert Date]
+**Effective Date:** September 12, 2026
+**Last Updated:** September 12, 2026
 
 *This document is a template drafted for Docloom and does not constitute legal advice. Have it reviewed by a qualified attorney before publishing, particularly regarding consumer protection law, subscription/auto-renewal disclosure requirements, and liability limitations enforceable in your target markets.*
 
@@ -9,7 +9,7 @@
 
 ## 1. Acceptance of Terms
 
-These Terms and Conditions ("Terms") govern your access to and use of Docloom (the "Service"), operated by [Legal Entity Name / Founder Name] ("Docloom," "we," "us," or "our"), accessible at https://docloom.dev. By creating an account, connecting a GitHub repository, or otherwise using the Service, you agree to be bound by these Terms. If you do not agree, do not use the Service.
+These Terms and Conditions ("Terms") govern your access to and use of Docloom (the "Service"), operated by Babar Khan, an individual ("Docloom," "we," "us," or "our"), accessible at https://docloom.dev. By creating an account, connecting a GitHub repository, or otherwise using the Service, you agree to be bound by these Terms. If you do not agree, do not use the Service.
 
 ## 2. Description of Service
 
@@ -98,9 +98,7 @@ You agree to indemnify and hold harmless Docloom, its founder, and any affiliate
 
 ## 16. Governing Law and Dispute Resolution
 
-These Terms shall be governed by the laws of [Insert Jurisdiction — e.g., the State of Delaware, USA, or the Republic of India], without regard to its conflict of law provisions. Any disputes arising under these Terms shall be resolved through [binding arbitration / the courts of [Insert Jurisdiction]], as the exclusive forum for resolving disputes, except where prohibited by applicable consumer protection law.
-
-*Note: The appropriate governing law and dispute resolution mechanism should be selected based on where the business is legally incorporated and where its primary customer base resides — this has meaningful tax, liability, and enforceability implications and should be confirmed with legal counsel.*
+These Terms shall be governed by the laws of India, and the courts at Uttar Pradesh, India shall have exclusive jurisdiction over any disputes arising under these Terms, except where prohibited by applicable consumer protection law.
 
 ## 17. Changes to These Terms
 
@@ -118,5 +116,5 @@ These Terms, together with the Privacy Policy and any End User License Agreement
 
 Questions about these Terms can be directed to:
 
-**Email:** [insert support/contact email]
+**Email:** docloom.help@gmail.com
 **Website:** https://docloom.dev
