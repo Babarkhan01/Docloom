@@ -80,4 +80,4 @@ This EULA, together with the Terms and Conditions and Privacy Policy, constitute
 Questions about this EULA can be directed to:
 
 **Email:** docloom.help@gmail.com
-**Website:** https://docloom.dev
+**Website:** https://docloom.babar-wealthpilot.workers.dev

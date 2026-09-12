@@ -7,7 +7,7 @@
 
 ## 1. Acceptance of Terms
 
-These Terms and Conditions ("Terms") govern your access to and use of Docloom (the "Service"), operated by Babar Khan, an individual ("Docloom," "we," "us," or "our"), accessible at https://docloom.dev. By creating an account, connecting a GitHub repository, or otherwise using the Service, you agree to be bound by these Terms. If you do not agree, do not use the Service.
+These Terms and Conditions ("Terms") govern your access to and use of Docloom (the "Service"), operated by Babar Khan, an individual ("Docloom," "we," "us," or "our"), accessible at https://docloom.babar-wealthpilot.workers.dev. By creating an account, connecting a GitHub repository, or otherwise using the Service, you agree to be bound by these Terms. If you do not agree, do not use the Service.
 
 ## 2. Description of Service
 
@@ -115,4 +115,4 @@ These Terms, together with the Privacy Policy and any End User License Agreement
 Questions about these Terms can be directed to:
 
 **Email:** docloom.help@gmail.com
-**Website:** https://docloom.dev
+**Website:** https://docloom.babar-wealthpilot.workers.dev
