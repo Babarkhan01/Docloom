@@ -3,8 +3,6 @@
 **Effective Date:** September 12, 2026
 **Last Updated:** September 12, 2026
 
-*This document is a template drafted for Docloom and does not constitute legal advice. Have it reviewed by a qualified attorney before publishing, particularly if you serve users in the EU/UK (where ePrivacy/GDPR rules require consent for non-essential cookies) or California (CCPA/CPRA cookie disclosure requirements).*
-
 ---
 
 ## 1. What Are Cookies

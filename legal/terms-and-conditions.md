@@ -3,8 +3,6 @@
 **Effective Date:** September 12, 2026
 **Last Updated:** September 12, 2026
 
-*This document is a template drafted for Docloom and does not constitute legal advice. Have it reviewed by a qualified attorney before publishing, particularly regarding consumer protection law, subscription/auto-renewal disclosure requirements, and liability limitations enforceable in your target markets.*
-
 ---
 
 ## 1. Acceptance of Terms

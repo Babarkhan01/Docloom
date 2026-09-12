@@ -3,8 +3,6 @@
 **Effective Date:** September 12, 2026
 **Last Updated:** September 12, 2026
 
-*This document is a template drafted for Docloom and does not constitute legal advice. Refund obligations vary significantly by jurisdiction and payment processor rules — have this reviewed by a qualified attorney, and confirm consistency with Dodo Payments' own merchant-of-record refund handling before publishing.*
-
 ---
 
 ## 1. Overview
