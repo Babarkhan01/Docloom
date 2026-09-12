@@ -126,18 +126,6 @@ export default async function Home() {
           </div>
         </section>
       </main>
-
-      <footer className="mx-auto flex w-full max-w-5xl items-center justify-between border-t border-zinc-900 px-6 py-8 text-sm text-zinc-600">
-        <p className="font-mono">© {new Date().getFullYear()} docloom</p>
-        <nav className="flex gap-4">
-          <Link href="/terms" className="transition-colors hover:text-zinc-400">
-            Terms
-          </Link>
-          <Link href="/privacy" className="transition-colors hover:text-zinc-400">
-            Privacy
-          </Link>
-        </nav>
-      </footer>
     </div>
   );
 }
