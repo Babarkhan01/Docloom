@@ -24,9 +24,12 @@ function apiBase(): string {
   return mode === "live" ? LIVE_BASE : TEST_BASE;
 }
 
-/** Checkout sessions are only configured for test mode until we go live. */
+/**
+ * Billing is live when an API key and product ids are configured. DODO_MODE
+ * selects the API base (test vs live); both modes are valid once configured.
+ */
 export function dodoEnabled(): boolean {
-  return Boolean(process.env.DODO_API_KEY) && process.env.DODO_MODE !== "live";
+  return Boolean(process.env.DODO_API_KEY && process.env.DODO_STARTER_PRODUCT_ID && process.env.DODO_TEAM_PRODUCT_ID);
 }
 
 export type CheckoutSession = {
