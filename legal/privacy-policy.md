@@ -114,5 +114,5 @@ We may update this Privacy Policy from time to time. Material changes will be co
 
 If you have questions about this Privacy Policy or wish to exercise any of your data rights, contact us at:
 
-**Email:** docloom.help@gmail.com
+**Email:** docloom.help@outlook.com
 **Website:** https://docloom.babar-wealthpilot.workers.dev

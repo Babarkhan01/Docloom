@@ -62,5 +62,5 @@ We may update this Refund Policy from time to time. Material changes will be ref
 
 Refund requests and questions about this policy can be directed to:
 
-**Email:** docloom.help@gmail.com
+**Email:** docloom.help@outlook.com
 **Website:** https://docloom.babar-wealthpilot.workers.dev

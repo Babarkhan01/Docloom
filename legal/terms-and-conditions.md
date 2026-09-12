@@ -114,5 +114,5 @@ These Terms, together with the Privacy Policy and any End User License Agreement
 
 Questions about these Terms can be directed to:
 
-**Email:** docloom.help@gmail.com
+**Email:** docloom.help@outlook.com
 **Website:** https://docloom.babar-wealthpilot.workers.dev

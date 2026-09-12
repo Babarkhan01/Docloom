@@ -58,5 +58,5 @@ We may update this Cookie Policy from time to time to reflect changes in the coo
 
 Questions about this Cookie Policy can be directed to:
 
-**Email:** docloom.help@gmail.com
+**Email:** docloom.help@outlook.com
 **Website:** https://docloom.babar-wealthpilot.workers.dev
