@@ -19,7 +19,8 @@
     "db:studio": "drizzle-kit studio",
     "cf:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && wrangler deploy",
-    "cf:typegen": "wrangler types"
+    "cf:typegen": "wrangler types",
+    "legal:generate": "node scripts/generate-legal-content.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
