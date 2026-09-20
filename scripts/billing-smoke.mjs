@@ -5,7 +5,7 @@
 // 4. Unsigned request WITHOUT the test marker → expect 401 invalid_signature
 // 5. billing.ts unit checks: effectivePlan grace-window behavior
 import fs from "node:fs";
-import postgres from "postgres";
+import { neon } from "@neondatabase/serverless";
 import { SignJWT } from "jose";
 
 for (const line of fs.readFileSync(".env.local.secrets", "utf8").split("\n")) {
@@ -17,7 +17,8 @@ for (const line of fs.readFileSync(".env.local", "utf8").split("\n")) {
   if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
 }
 
-const sql = postgres(process.env.DATABASE_URL, { max: 1 });
+// Neon HTTP driver (same driver the app uses) — tagged-template queries.
+const sql = neon(process.env.DATABASE_URL);
 const BASE = "http://localhost:3000";
 
 const [user] = await sql`select id, login, session_version, email from users order by created_at asc limit 1`;
@@ -113,5 +114,4 @@ const [after] = await sql`select plan, dodo_customer_id, dodo_subscription_id, d
 console.log("user after:", after);
 await sql`delete from webhook_events where id like 'smoke-%'`;
 await sql`update users set plan = 'free', dodo_customer_id = null, dodo_subscription_id = null, dodo_subscription_status = null, dodo_grace_until = null where id = ${user.id}`;
-await sql.end();
 console.log(`plan logic: ${pass}/${cases.length} PASS — smoke complete`);

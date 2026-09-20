@@ -5,6 +5,7 @@ import { repos } from "@/lib/schema";
 import { ensureFreshUserToken, getUserRepos } from "@/lib/github";
 import { cleanupStaleBuckets, rateLimit } from "@/lib/rate-limit";
 import { getAuthorizedUser } from "@/lib/session";
+import { allowsPrivateRepos, effectivePlan, maxReposFor } from "@/lib/billing";
 
 export const dynamic = "force-dynamic";
 
@@ -50,7 +51,18 @@ export async function GET() {
       }))
       .sort((a, b) => a.fullName.localeCompare(b.fullName));
 
-    return NextResponse.json({ repos: available });
+    // Plan context so the picker can mirror (preview-only) what the connect
+    // endpoint will enforce: private repos are paid-only, counts are capped.
+    const plan = effectivePlan(authorized.user);
+    return NextResponse.json({
+      repos: available,
+      plan,
+      limits: {
+        maxRepos: maxReposFor(plan),
+        connectedCount: connected.length,
+        privateReposAllowed: allowsPrivateRepos(plan),
+      },
+    });
   } catch (err) {
     // Includes GitHub token revoked/expired and refresh failures — prompt
     // re-auth instead of crashing (tech spec §1: handle revocation gracefully).

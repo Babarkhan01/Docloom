@@ -87,6 +87,14 @@ export const repos = pgTable(
     // Subdomain where generated docs are hosted (e.g. owner-name.docloom.app)
     docsSubdomain: text("docs_subdomain").notNull().unique(),
     status: repoStatus("status").notNull().default("active"), // active / paused / disconnected
+    // Auto-regenerate docs when the default branch is pushed (paid feature,
+    // per-repo toggle; default OFF so existing repos never change behavior).
+    autoRegenerate: boolean("auto_regenerate").notNull().default(false),
+    // Head SHA of the last push we acted on (webhook dedupe for re-deliveries).
+    lastProcessedCommitSha: text("last_processed_commit_sha"),
+    // Last push we acted on — anchors the debounce window (rapid pushes
+    // collapse into the one queued run instead of duplicating it).
+    lastWebhookAt: timestamp("last_webhook_at"),
     error: text("error"),
     connectedAt: timestamp("connected_at").notNull().defaultNow(),
     lastGeneratedAt: timestamp("last_generated_at"),

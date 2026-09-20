@@ -40,7 +40,23 @@ export function appUrl(): string {
         "Set DOCLOOM_ALLOW_LOCALHOST_URL=1 only when intentionally running production mode on localhost.",
     );
   }
-  return value;
+  // Strip trailing slashes: every caller appends a path (`${appUrl()}/dashboard`),
+  // and a trailing slash produces `//` in the middle of the URL. GitHub compares
+  // OAuth redirect_uri by exact string match, so that difference alone is the
+  // "Invalid Redirect URI" error.
+  return value.replace(/\/+$/, "");
+}
+
+/**
+ * GitHub logins allowed to view /admin (comma-separated, case-insensitive).
+ * Deny-by-default: with the var unset nobody is an admin, so /admin 404s for
+ * everyone rather than exposing a half-gated internal page.
+ */
+export function adminLogins(): string[] {
+  return (process.env.ADMIN_GITHUB_LOGINS ?? "")
+    .split(",")
+    .map((login) => login.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 export function rateLimitConfig() {

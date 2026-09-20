@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { generations, repos } from "@/lib/schema";
 import {
@@ -11,6 +11,8 @@ import { cleanupStaleBuckets, rateLimit } from "@/lib/rate-limit";
 import { getAuthorizedUser } from "@/lib/session";
 import { withRouteErrors } from "@/lib/route-wrapper";
 import { slugify } from "@/lib/slug";
+import { track } from "@/lib/analytics";
+import { checkConnectEligibility, effectivePlan } from "@/lib/billing";
 
 export const dynamic = "force-dynamic";
 
@@ -135,6 +137,27 @@ async function reposPostHandler(request: NextRequest) {
     );
   }
 
+  // Plan gate for NEW connects (repos connected before the tier split are
+  // grandfathered: they keep working, they just count toward the limit).
+  const [{ count }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(repos)
+    .where(eq(repos.userId, authorized.user.id));
+  // The repo's privacy is only known after matching it on GitHub, so the
+  // privacy half of the gate is re-checked in the try block below. The count
+  // half is checked here to fail fast without a GitHub round-trip.
+  const countGate = checkConnectEligibility({
+    plan: effectivePlan(authorized.user),
+    connectedCount: count,
+    isPrivate: false,
+  });
+  if (!countGate.ok && countGate.reason === "repo_limit") {
+    return NextResponse.json(
+      { error: countGate.error, message: countGate.message, upgradeTo: countGate.upgradeTo },
+      { status: countGate.status },
+    );
+  }
+
   try {
     const token = await ensureFreshUserToken(authorized.user.id);
     const githubRepos = await getUserRepos(token);
@@ -161,6 +184,19 @@ async function reposPostHandler(request: NextRequest) {
       );
     }
 
+    // Privacy half of the plan gate — authoritative now that we know isPrivate.
+    const privacyGate = checkConnectEligibility({
+      plan: effectivePlan(authorized.user),
+      connectedCount: count,
+      isPrivate: match.isPrivate,
+    });
+    if (!privacyGate.ok) {
+      return NextResponse.json(
+        { error: privacyGate.error, message: privacyGate.message, upgradeTo: privacyGate.upgradeTo },
+        { status: privacyGate.status },
+      );
+    }
+
     const docsSubdomain = await uniqueDocsSubdomain(slugify(fullName));
 
     const [created] = await db
@@ -176,6 +212,11 @@ async function reposPostHandler(request: NextRequest) {
         docsSubdomain,
       })
       .returning();
+
+    track(authorized.user.id, "repo_connected", {
+      repo: created.githubRepoFullName,
+      isPrivate: created.isPrivate,
+    });
 
     return NextResponse.json(
       {

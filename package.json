@@ -8,6 +8,8 @@
     "build:webpack": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "dev:staging": "dotenv -e .env.staging -- next dev",
     "build:staging": "dotenv -e .env.staging -- next build",
     "start:staging": "dotenv -e .env.staging -- next start",
@@ -29,7 +31,8 @@
     "drizzle-orm": "^0.45.2",
     "jose": "^6.2.12",
     "next": "16.3.4",
-    "postgres": "^3.4.9",
+    "posthog-js": "^1.434.2",
+    "posthog-node": "^5.52.4",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-markdown": "^10.1.0",
@@ -47,6 +50,7 @@
     "eslint-config-next": "16.3.4",
     "tailwindcss": "^4",
     "typescript": "^5.9.3",
+    "vitest": "^3.2.7",
     "wrangler": "^4.130.0"
   }
 }

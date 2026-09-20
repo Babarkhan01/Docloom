@@ -9,11 +9,30 @@ export function routeKey(r: ParsedRoute): string {
   return `${r.method ?? "?"} ${r.routePath}`;
 }
 
+/**
+ * Honest-coverage note for a run. `filesSkipped` counts candidate route files
+ * beyond the run's file cap — endpoints defined there are missing from the
+ * output, and the draft says so instead of looking complete.
+ */
+export type GenerationCoverage = {
+  filesSkipped: number;
+  fileCap: number;
+};
+
+function coverageLines(coverage: GenerationCoverage): string[] {
+  if (coverage.filesSkipped <= 0) return [];
+  return [
+    `> **Coverage note:** ${coverage.filesSkipped} route file${coverage.filesSkipped === 1 ? " was" : "s were"} not scanned in this run (file cap: ${coverage.fileCap}), so endpoints defined there are missing. Run a manual regeneration for complete coverage.`,
+    "",
+  ];
+}
+
 export function buildApiMarkdown(
   repoFullName: string,
   branch: string,
   routes: ParsedRoute[],
   descriptions: Map<string, string>,
+  coverage?: GenerationCoverage,
 ): string {
   const lines: string[] = [];
   lines.push(`# ${repoFullName} — API Reference`);
@@ -22,6 +41,7 @@ export function buildApiMarkdown(
     `Structural facts below were extracted from the source at branch \`${branch}\` with a TypeScript AST parser; descriptions are AI-written from those facts only.`,
   );
   lines.push("");
+  if (coverage) lines.push(...coverageLines(coverage));
 
   if (routes.length === 0) {
     lines.push("## Endpoints");

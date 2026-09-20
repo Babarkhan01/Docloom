@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Build artifacts (OpenNext Cloudflare output, wrangler state) — linting
+    // these produces thousands of false positives from bundled code.
+    ".open-next/**",
+    ".wrangler/**",
   ]),
 ]);
 

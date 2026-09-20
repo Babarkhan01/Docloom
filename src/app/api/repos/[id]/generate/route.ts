@@ -5,6 +5,7 @@ import { repos } from "@/lib/schema";
 import { getAuthorizedUser } from "@/lib/session";
 import { cleanupStaleBuckets, rateLimit } from "@/lib/rate-limit";
 import { checkQuota, runGeneration } from "@/lib/generation";
+import { track } from "@/lib/analytics";
 
 export const dynamic = "force-dynamic";
 
@@ -35,12 +36,25 @@ export async function POST(
   if (!repo) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
   const quota = await checkQuota(authorized.user.id);
-  if (!quota.ok) return NextResponse.json({ error: quota.error, message: quota.message }, { status: quota.status });
+  if (!quota.ok) {
+    return NextResponse.json(
+      { error: quota.error, message: quota.message, upgradeTo: quota.upgradeTo },
+      { status: quota.status },
+    );
+  }
 
   const outcome = await runGeneration(repo.id, "manual");
   if (!outcome.ok) {
     return NextResponse.json({ error: outcome.error, message: outcome.message }, { status: outcome.status });
   }
+
+  track(authorized.user.id, "docs_generated", {
+    repoId: repo.id,
+    generationId: outcome.generationId,
+    endpointCount: outcome.endpointCount,
+    aiUsed: outcome.aiUsed,
+  });
+
   return NextResponse.json({
     generationId: outcome.generationId,
     endpointCount: outcome.endpointCount,

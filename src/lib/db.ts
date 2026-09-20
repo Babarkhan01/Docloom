@@ -1,6 +1,4 @@
-import { drizzle as drizzlePostgres } from "drizzle-orm/postgres-js";
-import { drizzle as drizzleNeonHttp } from "drizzle-orm/neon-http";
-import postgres from "postgres";
+import { drizzle as drizzleNeonHttp, type NeonHttpDatabase } from "drizzle-orm/neon-http";
 import { neon } from "@neondatabase/serverless";
 import * as schema from "./schema";
 import { getEnv } from "./env";
@@ -11,61 +9,40 @@ import { loadEnvFileSecrets } from "./env-file";
 loadEnvFileSecrets();
 
 const globalForDb = globalThis as unknown as {
-  dbClient?: unknown;
+  dbClient?: ReturnType<typeof neon>;
   db?: DB;
 };
 
 /**
- * Driver selection:
- * - neon-http: Neon's HTTP (fetch) driver. Required on Cloudflare Workers —
- *   the TCP driver cannot connect (no raw sockets), and Workers' TLS stack
- *   rejects postgres-js' ssl rejectUnauthorized option outright. Pooled URLs
- *   (-pooler hosts) are safe for HTTP queries: each fetch is one transaction.
- * - postgres-js: standard TCP driver for direct (non-pooled) connections.
- *
- * Override with DOCLOOM_DB_DRIVER=neon-http|postgres if needed. drizzle-kit
- * migrations use their own client (drizzle.config.ts) and are unaffected.
+ * Single driver: Neon's HTTP (fetch) driver. Required on Cloudflare Workers —
+ * there are no raw TCP sockets, and the Workers TLS stack rejects postgres-js'
+ * ssl rejectUnauthorized option outright. Pooled URLs (-pooler hosts) are
+ * required: each HTTP query is one transaction, which only behaves correctly
+ * behind pgbouncer/transaction mode. Use the pooled connection string for
+ * DATABASE_URL (local dev included — the HTTP driver works the same there).
  */
-function useNeonHttp(url: string): boolean {
-  if (process.env.DOCLOOM_DB_DRIVER) return process.env.DOCLOOM_DB_DRIVER === "neon-http";
-  return url.includes("-pooler.");
-}
-
-// Lazy singleton: importing this module must never require DATABASE_URL
-// (Next.js evaluates route modules at build time). The client connects on
-// first query, and getEnv() fails loudly there if the URL is missing.
 function client() {
   if (!globalForDb.dbClient) {
     const url = getEnv("DATABASE_URL");
-    if (useNeonHttp(url)) {
-      globalForDb.dbClient = neon(url);
-    } else {
-      globalForDb.dbClient = postgres(url, {
-        max: 10,
-        // Neon requires SSL
-        ssl: "require",
-        // Required when a pgbouncer transaction-mode endpoint is used with the
-        // TCP driver — it rejects named prepared statements.
-        prepare: false,
-      });
+    if (!url.includes("-pooler.")) {
+      throw new Error(
+        "DATABASE_URL must be a Neon pooled connection string (-pooler host) — " +
+          "Docloom uses Neon's HTTP driver, which requires the pooled endpoint.",
+      );
     }
+    globalForDb.dbClient = neon(url);
   }
   return globalForDb.dbClient;
 }
 
 function instance(): DB {
   if (!globalForDb.db) {
-    const clientInstance = client();
-    globalForDb.db = (
-      globalForDb.dbClient instanceof postgres
-        ? drizzlePostgres(clientInstance as ReturnType<typeof postgres>, { schema })
-        : drizzleNeonHttp(clientInstance as ReturnType<typeof neon>, { schema })
-    ) as DB;
+    globalForDb.db = drizzleNeonHttp(client(), { schema });
   }
   return globalForDb.db;
 }
 
-export type DB = ReturnType<typeof drizzlePostgres<typeof schema>>;
+export type DB = NeonHttpDatabase<typeof schema>;
 
 // Property-access proxy that lazily resolves the real drizzle instance,
 // keeping the `db.select()/insert()/...` call sites unchanged.

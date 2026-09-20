@@ -1,15 +1,17 @@
-import Link from "next/link";
 import Image from "next/image";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { generations, repos } from "@/lib/schema";
 import { getAuthorizedUser } from "@/lib/session";
 import { ConnectRepoModal } from "@/components/connect-repo-modal";
+import { Logo } from "@/components/logo";
 import { RepoCard } from "@/components/repo-card";
 import { SignOutButton } from "@/components/sign-out-button";
 import { UpgradeButton } from "@/components/upgrade-button";
-import { dailyGenerationLimitFor, effectivePlan, type Plan } from "@/lib/billing";
+import { isAdmin } from "@/lib/admin";
+import { dailyGenerationLimitFor, effectivePlan, maxReposFor, type Plan } from "@/lib/billing";
 
 export const dynamic = "force-dynamic";
 
@@ -45,13 +47,16 @@ export default async function DashboardPage() {
   return (
     <div className="mx-auto w-full max-w-5xl flex-1 px-6 py-10">
       <header className="mb-10 flex items-center justify-between gap-4">
-        <div className="flex items-baseline gap-3">
-          <Link href="/" className="font-mono text-base font-semibold tracking-tight">
-            docloom<span className="text-accent">.</span>
-          </Link>
-          <span className="font-mono text-xs text-zinc-600">dashboard</span>
-        </div>
+        <Logo label="dashboard" />
         <div className="flex items-center gap-3">
+          {isAdmin(authorized.user) ? (
+            <Link
+              href="/admin"
+              className="font-mono text-xs text-zinc-500 transition-colors hover:text-zinc-300"
+            >
+              admin
+            </Link>
+          ) : null}
           {authorized.user.avatarUrl ? (
             <Image
               src={authorized.user.avatarUrl}
@@ -66,7 +71,7 @@ export default async function DashboardPage() {
           </span>
           <span
             className="rounded-md border border-zinc-800 px-2 py-1 font-mono text-xs text-zinc-500"
-            title={`Daily generation cap: ${planLimit}`}
+            title={`Repos: ${userRepos.length}/${maxReposFor(plan)} · Daily generations: ${planLimit}/day${plan === "free" ? " · 1 public repo" : ""}`}
           >
             {plan}
           </span>
@@ -82,7 +87,7 @@ export default async function DashboardPage() {
             Connect a repo to generate and host its docs.
           </p>
         </div>
-        <ConnectRepoModal />
+        <ConnectRepoModal plan={plan} connectedCount={userRepos.length} />
       </div>
 
       {userRepos.length === 0 ? (

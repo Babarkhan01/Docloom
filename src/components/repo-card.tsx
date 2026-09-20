@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { GenerationStatus } from "@/lib/schema";
 import { StatusBadge } from "./status-badge";
+import { DisconnectRepoButton } from "./disconnect-repo-button";
 
 export type RepoCardRepo = {
   id: string;
@@ -96,6 +97,7 @@ export function RepoCard({
           </dd>
         </div>
       </dl>
+      <DisconnectRepoButton repoId={repo.id} fullName={repo.fullName} isHosted={repo.isHosted} />
     </article>
   );
 }

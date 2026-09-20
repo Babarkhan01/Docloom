@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "./db";
 import { users } from "./schema";
 import { decrypt, encrypt } from "./crypto";
-import { getEnv } from "./env";
+import { appUrl, getEnv } from "./env";
 import { loadEnvFileSecrets } from "./env-file";
 import { githubPrivateKey } from "./github-key";
 
@@ -105,6 +105,25 @@ export type OAuthTokenResponse = {
   refresh_token?: string | null;
   refresh_token_expires_in?: number;
 };
+
+/**
+ * The OAuth redirect_uri, built from the configured public base URL (APP_URL) —
+ * never from the incoming request.
+ *
+ * GitHub matches redirect_uri against the App's registered callback URLs (an
+ * exact string match, unless wildcard matching has been explicitly enabled on
+ * the registration). Deriving it from `request.url` meant any host other than
+ * the registered one — a `*.workers.dev` deployment, `wrangler dev` on :8787,
+ * a dev server on a second port — was rejected with "Invalid Redirect URI"
+ * before the browser ever came back to us. It also made the value
+ * attacker-influenceable via the Host header.
+ *
+ * The authorize request and the token exchange must send the *same* URL:
+ * GitHub validates both against the registration.
+ */
+export function oauthRedirectUri(): string {
+  return `${appUrl()}/api/auth/github/callback`;
+}
 
 export function authorizeUrl(state: string, redirectUri: string): string {
   const params = new URLSearchParams({

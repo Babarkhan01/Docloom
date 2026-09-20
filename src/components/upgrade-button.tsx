@@ -52,7 +52,9 @@ export function UpgradeButton() {
             className="w-full rounded-md border border-zinc-800 px-3 py-2 text-left text-sm transition-colors hover:border-zinc-600 disabled:opacity-50"
           >
             <span className="font-medium">Starter — $19/mo</span>
-            <span className="block text-xs text-zinc-500">25 generations / day</span>
+            <span className="block text-xs text-zinc-500">
+              5 repos · private repos · auto-regenerate on merge · no branding · 25 gen/day
+            </span>
           </button>
           <button
             type="button"
@@ -61,7 +63,9 @@ export function UpgradeButton() {
             className="mt-2 w-full rounded-md border border-zinc-800 px-3 py-2 text-left text-sm transition-colors hover:border-zinc-600 disabled:opacity-50"
           >
             <span className="font-medium">Team — $49/mo</span>
-            <span className="block text-xs text-zinc-500">100 generations / day</span>
+            <span className="block text-xs text-zinc-500">
+              20 repos · everything in Starter · 100 gen/day
+            </span>
           </button>
           {loading ? <p className="mt-2 font-mono text-xs text-zinc-500">opening checkout…</p> : null}
           {error ? <p className="mt-2 text-xs text-red-400">{error}</p> : null}

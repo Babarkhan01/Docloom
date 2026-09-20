@@ -6,7 +6,10 @@ import remarkGfm from "remark-gfm";
 import { db } from "@/lib/db";
 import { generations, repos } from "@/lib/schema";
 import { getAuthorizedUser } from "@/lib/session";
+import { effectivePlan } from "@/lib/billing";
 import { GenerationActions } from "@/components/generation-actions";
+import { AutoRegenToggle } from "@/components/auto-regen-toggle";
+import { DraftDiff } from "@/components/draft-diff";
 
 export const dynamic = "force-dynamic";
 
@@ -119,11 +122,14 @@ export default async function RepoDetailPage({ params }: { params: Promise<{ id:
             )}
           </p>
         </div>
-        <GenerationActions
-          repoId={repo.id}
-          draftGenerationId={draft?.id ?? null}
-          hasUnpublishedChanges={hasUnpublishedChanges}
-        />
+        <div className="flex flex-col items-end gap-3">
+          <GenerationActions
+            repoId={repo.id}
+            draftGenerationId={draft?.id ?? null}
+            hasUnpublishedChanges={hasUnpublishedChanges}
+          />
+          <AutoRegenToggle repoId={repo.id} initial={repo.autoRegenerate} plan={effectivePlan(authorized.user)} />
+        </div>
       </header>
 
       {draft ? (
@@ -138,9 +144,13 @@ export default async function RepoDetailPage({ params }: { params: Promise<{ id:
             </span>
           </div>
           {published && hasUnpublishedChanges ? (
-            <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 font-mono text-xs text-amber-400">
-              This draft differs from the published version — publish to replace it, or discard.
-            </p>
+            <>
+              <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 font-mono text-xs text-amber-400">
+                This draft differs from the published version — publish to replace it, or discard. Nothing is published
+                until you approve it here, even when a draft was produced automatically.
+              </p>
+              <DraftDiff oldMarkdown={published.markdown ?? ""} newMarkdown={draft.markdown ?? ""} />
+            </>
           ) : null}
           <article className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6">
             <Markdown>{draft.markdown ?? ""}</Markdown>

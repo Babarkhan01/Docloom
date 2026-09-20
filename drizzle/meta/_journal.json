@@ -29,6 +29,13 @@
       "when": 1788708969506,
       "tag": "0003_medical_phalanx",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789906699168,
+      "tag": "0004_auto_regen_columns",
+      "breakpoints": true
     }
   ]
 }

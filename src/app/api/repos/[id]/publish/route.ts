@@ -5,6 +5,7 @@ import { generations, repos } from "@/lib/schema";
 import { getAuthorizedUser } from "@/lib/session";
 import { withRouteErrors } from "@/lib/route-wrapper";
 import { cleanupStaleBuckets, rateLimit } from "@/lib/rate-limit";
+import { track } from "@/lib/analytics";
 
 export const dynamic = "force-dynamic";
 
@@ -58,6 +59,8 @@ async function publishHandler(
     .update(repos)
     .set({ publishedGenerationId: gen.id, updatedAt: new Date() })
     .where(eq(repos.id, id));
+
+  track(authorized.user.id, "docs_published", { repoId: id, generationId: gen.id });
 
   return NextResponse.json({ published: true, generationId: gen.id });
 }
