@@ -3,9 +3,10 @@ import { cookies } from "next/headers";
 import { db } from "@/lib/db";
 import { users } from "@/lib/schema";
 import { encrypt } from "@/lib/crypto";
-import { exchangeCode, getUser } from "@/lib/github";
+import { exchangeCode, getUser, oauthRedirectUri } from "@/lib/github";
 import { cleanupStaleBuckets, clientIp, rateLimit } from "@/lib/rate-limit";
 import { createSessionToken, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS } from "@/lib/session-core";
+import { track } from "@/lib/analytics";
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +50,8 @@ export async function GET(request: NextRequest) {
     return redirectToLogin(request, FAIL.state_mismatch);
   }
 
-  const redirectUri = new URL("/api/auth/github/callback", request.url).toString();
+  // Must be byte-identical to the value sent on the authorize request.
+  const redirectUri = oauthRedirectUri();
 
   try {
     const tokens = await exchangeCode(code, redirectUri);
@@ -93,6 +95,15 @@ export async function GET(request: NextRequest) {
 
     if (!row) return redirectToLogin(request, FAIL.db_error);
 
+    // Activation funnel: signup (fires for both new and returning users; the
+    // $pageview flow on the marketing page is what feeds the top of funnel).
+    track(row.id, "signup", { login: ghUser.login, isNew: Boolean(row) });
+
+    // One-time hint cookie so the client provider can identify this browser
+    // and merge client events (CTA clicks) with server events. Contains ids
+    // only — never tokens.
+    const phHint = encodeURIComponent(JSON.stringify({ id: row.id, login: ghUser.login }));
+
     // Our own signed session token — the browser never sees the GitHub token.
     const sessionToken = await createSessionToken({
       userId: row.id,
@@ -107,6 +118,13 @@ export async function GET(request: NextRequest) {
       secure: process.env.NODE_ENV === "production",
       path: "/",
       maxAge: SESSION_MAX_AGE_SECONDS,
+    });
+    response.cookies.set("docloom_ph", phHint, {
+      httpOnly: false, // read by AnalyticsProvider to call posthog.identify
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: 60 * 60 * 24, // 24h — only needed right after sign-in
     });
     return response;
   } catch (err) {

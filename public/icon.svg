@@ -1,5 +1,22 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#09090b"/>
-  <path d="M18 20h28v8H18zM18 32h28v12H18z" fill="#8b5cf6" opacity="0.9"/>
-  <rect x="18" y="32" width="14" height="12" fill="#f4f4f5"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Docloom">
+  <rect width="64" height="64" rx="14" fill="#09090b" />
+  <!-- Loom mark, scaled about the centre of the 64×64 tile. -->
+  <g transform="translate(32 32) scale(1.25) translate(-32 -32)">
+    <g fill="#8b5cf6">
+      <rect x="16" y="14" width="6" height="36" />
+      <rect x="29" y="14" width="6" height="36" />
+      <rect x="42" y="14" width="6" height="36" />
+    </g>
+    <g fill="#e4e4e7">
+      <rect x="10" y="29" width="44" height="6" />
+      <rect x="10" y="18" width="6" height="6" />
+      <rect x="22" y="18" width="7" height="6" />
+      <rect x="35" y="18" width="7" height="6" />
+      <rect x="48" y="18" width="6" height="6" />
+      <rect x="10" y="40" width="6" height="6" />
+      <rect x="22" y="40" width="7" height="6" />
+      <rect x="35" y="40" width="7" height="6" />
+      <rect x="48" y="40" width="6" height="6" />
+    </g>
+  </g>
 </svg>

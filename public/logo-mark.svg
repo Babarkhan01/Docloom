@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="6 10 52 44" role="img" aria-label="Docloom">
+  <!-- Loom mark: violet warp threads woven over/under light weft lines. -->
+  <g fill="#8b5cf6">
+    <rect x="16" y="14" width="6" height="36" />
+    <rect x="29" y="14" width="6" height="36" />
+    <rect x="42" y="14" width="6" height="36" />
+  </g>
+  <g fill="#e4e4e7">
+    <!-- weft over the warp -->
+    <rect x="10" y="29" width="44" height="6" />
+    <!-- weft under the warp: broken at each intersection -->
+    <rect x="10" y="18" width="6" height="6" />
+    <rect x="22" y="18" width="7" height="6" />
+    <rect x="35" y="18" width="7" height="6" />
+    <rect x="48" y="18" width="6" height="6" />
+    <rect x="10" y="40" width="6" height="6" />
+    <rect x="22" y="40" width="7" height="6" />
+    <rect x="35" y="40" width="7" height="6" />
+    <rect x="48" y="40" width="6" height="6" />
+  </g>
+</svg>

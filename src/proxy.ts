@@ -24,7 +24,7 @@ export async function proxy(request: NextRequest) {
     if (authed) return NextResponse.redirect(new URL("/dashboard", request.url));
     response = NextResponse.next();
   } else {
-    // /dashboard/*
+    // /dashboard/*, /admin/*
     if (!authed) return NextResponse.redirect(new URL("/login", request.url));
     response = NextResponse.next();
   }
@@ -44,5 +44,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/api/repos/:path*", "/login"],
+  matcher: ["/dashboard/:path*", "/admin/:path*", "/api/repos/:path*", "/login"],
 };

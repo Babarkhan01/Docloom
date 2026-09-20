@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { appUrl } from "@/lib/env";
 import { SiteFooter } from "@/components/site-footer";
+import { AnalyticsProvider } from "@/components/analytics-provider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -24,6 +25,7 @@ export const metadata: Metadata = {
   // appUrl() throws in production when APP_URL is unset — no silent
   // localhost fallback in deployed environments.
   metadataBase: new URL(appUrl()),
+  icons: { icon: "/icon.svg", shortcut: "/icon.svg", apple: "/icon.svg" },
 };
 
 export default function RootLayout({
@@ -35,7 +37,7 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col bg-background text-foreground">
-        {children}
+        <AnalyticsProvider>{children}</AnalyticsProvider>
         <SiteFooter />
       </body>
     </html>

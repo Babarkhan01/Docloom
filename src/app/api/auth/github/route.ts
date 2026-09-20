@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
-import { authorizeUrl } from "@/lib/github";
+import { authorizeUrl, oauthRedirectUri } from "@/lib/github";
 import { cleanupStaleBuckets, clientIp, rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +24,9 @@ export async function GET(request: NextRequest) {
 
   // CSRF protection: random state, stored in a short-lived httpOnly cookie.
   const state = randomBytes(16).toString("hex");
-  const redirectUri = new URL("/api/auth/github/callback", request.url).toString();
+  // From APP_URL, not request.url — GitHub requires an exact match against the
+  // App's registered callback URL (see oauthRedirectUri in lib/github.ts).
+  const redirectUri = oauthRedirectUri();
 
   const response = NextResponse.redirect(authorizeUrl(state, redirectUri));
   response.cookies.set(OAUTH_STATE_COOKIE, state, {

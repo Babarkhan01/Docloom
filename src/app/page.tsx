@@ -2,6 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { GitHubIcon } from "@/components/github-icon";
+import { Logo } from "@/components/logo";
+import { TrackedCtaLink } from "@/components/tracked-cta-link";
 
 const STEPS = [
   {
@@ -39,9 +41,7 @@ export default async function Home() {
   return (
     <div className="flex flex-1 flex-col">
       <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
-        <Link href="/" className="font-mono text-base font-semibold tracking-tight">
-          docloom<span className="text-accent">.</span>
-        </Link>
+        <Logo />
         <nav className="flex items-center gap-4 text-sm text-zinc-400">
           <a href="#how-it-works" className="transition-colors hover:text-zinc-200">
             How it works
@@ -69,13 +69,14 @@ export default async function Home() {
             whenever your code changes.
           </p>
           <div className="mt-10 flex flex-col gap-3 sm:flex-row sm:items-center">
-            <a
+            <TrackedCtaLink
+              cta="hero_connect_repo"
               href="/api/auth/github"
               className="inline-flex items-center justify-center gap-2 rounded-md bg-zinc-100 px-6 py-3 text-sm font-medium text-zinc-900 transition-colors hover:bg-white"
             >
               <GitHubIcon />
               Connect your repo
-            </a>
+            </TrackedCtaLink>
             <a
               href="#how-it-works"
               className="inline-flex items-center justify-center rounded-md border border-zinc-800 px-6 py-3 text-sm font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-100"

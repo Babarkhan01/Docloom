@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { GitHubIcon } from "@/components/github-icon";
+import { Logo } from "@/components/logo";
 
 const ERROR_MESSAGES: Record<string, string> = {
   github: "GitHub didn't complete the sign-in. Please try again.",
@@ -20,9 +21,7 @@ export default async function LoginPage({
     <main className="flex flex-1 items-center justify-center px-6 py-16">
       <div className="w-full max-w-sm">
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-8">
-          <Link href="/" className="font-mono text-lg font-semibold tracking-tight">
-            docloom<span className="text-accent">.</span>
-          </Link>
+          <Logo wordmarkClassName="font-mono text-lg font-semibold tracking-tight" />
           <h1 className="mt-6 text-xl font-semibold tracking-tight">
             Sign in to continue
           </h1>
