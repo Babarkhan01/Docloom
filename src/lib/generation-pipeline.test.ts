@@ -66,7 +66,12 @@ const fakeRoute = {
   exportedSymbols: ["GET"],
 } as unknown as ParsedRoute;
 
-function fakeIo(entries: RepoTreeEntry[], blobs: Record<string, string | null>, routes: ParsedRoute[] = [fakeRoute]): PipelineIo & { blobFetches: string[] } {
+function fakeIo(
+  entries: RepoTreeEntry[],
+  blobs: Record<string, string | null>,
+  routes: ParsedRoute[] = [fakeRoute],
+  diagnostics: { wrappedOpaque: { method: string; filePath: string }[] } = { wrappedOpaque: [] },
+): PipelineIo & { blobFetches: string[] } {
   const blobFetches: string[] = [];
   return {
     blobFetches,
@@ -77,7 +82,7 @@ function fakeIo(entries: RepoTreeEntry[], blobs: Record<string, string | null>, 
       blobFetches.push(path);
       return blobs[path] ?? null;
     },
-    parseRouteFiles: () => routes,
+    parseRouteFiles: () => ({ routes, diagnostics }),
     aiEnabled: () => false,
     async describeRoutes() {
       throw new Error("describeRoutes must not be called when AI is disabled");
@@ -145,7 +150,7 @@ describe("executePipeline", () => {
     expect(io.blobFetches).toHaveLength(20);
     const markdown = genPatches["gen-3"][0]?.markdown ?? "";
     expect(markdown).toContain("Coverage note");
-    expect(markdown).toContain("5 route files were not scanned in this run (file cap: 20)");
+    expect(markdown).toContain("5 route files were not scanned (file cap: 20)");
   });
 
   it("omits the coverage note when everything fit under the cap", async () => {

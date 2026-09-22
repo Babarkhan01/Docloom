@@ -2,7 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "./db";
 import { generations, repos, usageCounters, users } from "./schema";
 import { fetchRepoBlob, fetchRepoTree } from "./github";
-import { parseRouteFiles } from "./route-parser";
+import { parseRouteFilesWithDiagnostics, detectUnsupportedFramework } from "./route-parser";
 import { aiEnabled, describeRoutes } from "./ai";
 import { buildApiMarkdown, type GenerationCoverage } from "./docs";
 import { dailyGenerationLimitFor, effectivePlan, type Plan } from "./billing";
@@ -133,7 +133,8 @@ function quotaMessage(plan: Plan, used: number, limit: number): string {
 export type PipelineIo = {
   fetchTree: typeof fetchRepoTree;
   fetchBlob: typeof fetchRepoBlob;
-  parseRouteFiles: typeof parseRouteFiles;
+  /** Parses fetched route files; returns routes + unresolvable-handler diagnostics. */
+  parseRouteFiles: typeof parseRouteFilesWithDiagnostics;
   aiEnabled: typeof aiEnabled;
   describeRoutes: typeof describeRoutes;
 };
@@ -141,7 +142,7 @@ export type PipelineIo = {
 const defaultIo: PipelineIo = {
   fetchTree: fetchRepoTree,
   fetchBlob: fetchRepoBlob,
-  parseRouteFiles: parseRouteFiles,
+  parseRouteFiles: parseRouteFilesWithDiagnostics,
   aiEnabled: aiEnabled,
   describeRoutes: describeRoutes,
 };
@@ -200,12 +201,30 @@ export async function executePipeline(
     const tree = await io.fetchTree(repo.installationId, repo.owner, repo.name, repo.defaultBranch);
     if (tree.truncated) throw new Error("Repository tree too large to index (GitHub truncated the listing).");
 
+    // Pre-caps counts for the coverage summary (previously computed but unused):
+    const routeFilesJs = tree.entries.filter(
+      (e) => e.type === "blob" && /(^|\/)route\.(js|jsx)$/.test(e.path),
+    ).length;
+    const tooLarge = tree.entries.filter(
+      (e) =>
+        e.type === "blob" &&
+        /(^|\/)route\.(ts|tsx)$/.test(e.path) &&
+        (e.size ?? 0) > MAX_FILE_BYTES,
+    ).length;
+
     const eligible = tree.entries
       .filter((e) => e.type === "blob" && /(^|\/)route\.(ts|tsx)$/.test(e.path) && (e.size ?? 0) <= MAX_FILE_BYTES)
       .sort((a, b) => a.path.localeCompare(b.path));
     const candidates = eligible.slice(0, opts.maxFiles);
-    const coverage: GenerationCoverage | undefined =
-      eligible.length > candidates.length ? { filesSkipped: eligible.length - candidates.length, fileCap: opts.maxFiles } : undefined;
+    let coverage: GenerationCoverage | undefined =
+      eligible.length > candidates.length || tooLarge > 0 || routeFilesJs > 0
+        ? {
+            filesSkipped: eligible.length - candidates.length,
+            fileCap: opts.maxFiles,
+            filesTooLarge: tooLarge,
+            filesExcludedOther: routeFilesJs,
+          }
+        : undefined;
 
     // 2. AST parse — structural facts come from the compiler, never the LLM.
     const contents: { path: string; content: string }[] = [];
@@ -213,7 +232,42 @@ export async function executePipeline(
       const content = await io.fetchBlob(repo.installationId, repo.owner, repo.name, c.path, repo.defaultBranch);
       if (content !== null) contents.push({ path: c.path, content });
     }
-    const routes = io.parseRouteFiles(contents);
+    const { routes, diagnostics } = io.parseRouteFiles(contents);
+
+    // Honest unsupported-framework note (user-approved scope): when nothing
+    // parsed AND the source shows Express/Fastify/NestJS registrations, say so
+    // instead of a generic "no endpoints detected". On an empty parse, sample
+    // a few likely entry/server files (bounded: ≤5 extra fetches, so the
+    // subrequest budget still holds) and run detection on them + what we have.
+    let unsupportedFramework: string | null = null;
+    if (routes.length === 0) {
+      const samplePaths = tree.entries
+        .filter(
+          (e) =>
+            e.type === "blob" &&
+            /(^|\/)(server|app|main|index)\.(ts|js|mjs|cjs)$/.test(e.path) &&
+            !e.path.includes("node_modules") &&
+            (e.size ?? 0) <= MAX_FILE_BYTES &&
+            !candidates.some((c) => c.path === e.path),
+        )
+        .slice(0, 5)
+        .map((e) => e.path);
+      const sample: { path: string; content: string }[] = [...contents];
+      for (const p of samplePaths) {
+        const content = await io.fetchBlob(repo.installationId, repo.owner, repo.name, p, repo.defaultBranch);
+        if (content !== null) sample.push({ path: p, content });
+      }
+      unsupportedFramework = detectUnsupportedFramework(sample);
+    }
+    if (coverage) {
+      coverage.filesWithOpaqueHandlers = new Set(diagnostics.wrappedOpaque.map((d) => d.filePath)).size;
+      coverage.opaqueHandlers = diagnostics.wrappedOpaque;
+    }
+    if (unsupportedFramework && coverage) coverage.unsupportedFramework = unsupportedFramework;
+    if (unsupportedFramework && !coverage) {
+      // No cap/size skips, but the framework note still belongs in the draft.
+      coverage = { filesSkipped: 0, fileCap: opts.maxFiles, unsupportedFramework };
+    }
 
     // 3. AI writes prose for the parsed facts only (stub without API key).
     let descriptions = new Map<string, string>();
@@ -238,7 +292,7 @@ export async function executePipeline(
 
     await store.addQuota(repo.userId, tokensUsed);
 
-    return { ok: true, generationId, endpointCount: routes.length, tokensUsed, aiUsed: descriptions.size > 0 };
+    return { ok: true, generationId, endpointCount: routes.length, tokensUsed,  aiUsed: descriptions.size > 0 };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown generation error";
     console.error(`Generation failed for repo ${repo.githubRepoFullName}:`, err);

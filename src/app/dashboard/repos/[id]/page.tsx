@@ -10,6 +10,8 @@ import { effectivePlan } from "@/lib/billing";
 import { GenerationActions } from "@/components/generation-actions";
 import { AutoRegenToggle } from "@/components/auto-regen-toggle";
 import { DraftDiff } from "@/components/draft-diff";
+import { CoverageLine } from "@/components/coverage-line";
+import { coverageSummaryFromMarkdown } from "@/lib/docs";
 
 export const dynamic = "force-dynamic";
 
@@ -152,6 +154,7 @@ export default async function RepoDetailPage({ params }: { params: Promise<{ id:
               <DraftDiff oldMarkdown={published.markdown ?? ""} newMarkdown={draft.markdown ?? ""} />
             </>
           ) : null}
+          <CoverageLine coverage={coverageSummaryFromMarkdown(draft.markdown ?? "")} />
           <article className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6">
             <Markdown>{draft.markdown ?? ""}</Markdown>
           </article>
