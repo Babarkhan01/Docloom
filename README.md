@@ -247,3 +247,4 @@ Tokens (from `src/app/globals.css`): background `#09090b`, foreground
 
 Terms & Privacy drafts live in the planning docs and must be finalized and
 reviewed before launch (see `~/Desktop/~:docloom/05-…` and `06-…`).
+
