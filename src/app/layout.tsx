@@ -25,7 +25,17 @@ export const metadata: Metadata = {
   // appUrl() throws in production when APP_URL is unset — no silent
   // localhost fallback in deployed environments.
   metadataBase: new URL(appUrl()),
-  icons: { icon: "/icon.svg", shortcut: "/icon.svg", apple: "/icon.svg" },
+  icons: {
+    // Brand order: SVG loom mark first, multi-resolution ICO fallback,
+    // real Apple touch icon. (The favicon.ico asset is generated from
+    // public/icon.svg by scripts/generate-icons.mjs — single brand source.)
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/favicon.ico", sizes: "48x48", type: "image/x-icon" },
+    ],
+    shortcut: "/favicon.ico",
+    apple: "/apple-icon.png",
+  },
 };
 
 export default function RootLayout({
