@@ -270,3 +270,152 @@ describe("detectUnsupportedFramework", () => {
     expect(detectUnsupportedFramework(files)).toBe("NestJS");
   });
 });
+
+describe("cross-file schema resolution (M2)", () => {
+  const schemaFile = {
+    path: "src/lib/schemas.ts",
+    content: `import { z } from "zod";
+export const tokenSchema = z.object({
+  token: z.string().min(10),
+  scopes: z.array(z.enum(["read", "write"])).default(["read"]),
+});`,
+  };
+  const routeUsingImport = `import { tokenSchema } from "@/lib/schemas";
+export async function POST(req: Request) {
+  const body = tokenSchema.parse(await req.json());
+  return Response.json(body);
+}`;
+
+  it("resolves a schema imported via the @/ alias", () => {
+    const { routes } = parseRouteFileWithDiagnostics("app/api/x/route.ts", routeUsingImport, [schemaFile]);
+    expect(routes[0].requestBody?.resolved).toBe(true);
+    expect(routes[0].requestBody?.schemaName).toBe("tokenSchema");
+    expect(routes[0].requestBody?.fields.map((f) => f.name)).toEqual(["token", "scopes"]);
+  });
+
+  const routeImporting = (specifier: string, name = "tokenSchema") => `import { ${name} } from "${specifier}";
+export async function POST(req: Request) {
+  const body = ${name}.parse(await req.json());
+  return Response.json(body);
+}`;
+
+  it("resolves a schema imported via a relative path", () => {
+    const sibling = { path: "app/api/x/schemas.ts", content: schemaFile.content };
+    const { routes } = parseRouteFileWithDiagnostics("app/api/x/route.ts", routeImporting("./schemas"), [sibling]);
+    expect(routes[0].requestBody?.resolved).toBe(true);
+    expect(routes[0].requestBody?.fields.map((f) => f.name)).toEqual(["token", "scopes"]);
+  });
+
+  it("resolves a schema imported with a .js extension (TS convention)", () => {
+    const { routes } = parseRouteFileWithDiagnostics("app/api/x/route.ts", routeImporting("@/lib/schemas.js"), [schemaFile]);
+    expect(routes[0].requestBody?.resolved).toBe(true);
+  });
+
+  it("a derivation on an imported schema (extend) stays honestly unresolved", () => {
+    const derivedFile = {
+      path: "src/lib/derived.ts",
+      content: `import { z } from "zod";
+import { tokenSchema } from "./schemas";
+export const extended = tokenSchema.extend({ extra: z.string() });`,
+    };
+    const { routes } = parseRouteFileWithDiagnostics("app/api/x/route.ts", routeImporting("@/lib/derived", "extended"), [
+      schemaFile,
+      derivedFile,
+    ]);
+    // extend is a derivation: the schema is reachable and named, fields not claimed.
+    expect(routes[0].requestBody).toEqual({ source: "zod", schemaName: "extended", fields: [], resolved: false });
+  });
+
+  it("resolves an alias-to-import chain (const local = imported)", () => {
+    const aliasFile = {
+      path: "src/lib/alias.ts",
+      content: `import { tokenSchema } from "@/lib/schemas";
+export const aliased = tokenSchema;`,
+    };
+    const { routes } = parseRouteFileWithDiagnostics("app/api/x/route.ts", routeImporting("@/lib/alias", "aliased"), [
+      schemaFile,
+      aliasFile,
+    ]);
+    expect(routes[0].requestBody?.resolved).toBe(true);
+    expect(routes[0].requestBody?.fields.map((f) => f.name)).toEqual(["token", "scopes"]);
+  });
+
+  it("resolves through the src/ layout when the route is not under src/", () => {
+    const srcLayoutFile = { path: "src/lib/schemas.ts", content: schemaFile.content };
+    const { routes } = parseRouteFileWithDiagnostics(
+      "src/app/api/x/route.ts",
+      `import { tokenSchema } from "@/lib/schemas";
+export async function POST(req: Request) {
+  const body = tokenSchema.parse(await req.json());
+  return Response.json(body);
+}`,
+      [srcLayoutFile],
+    );
+    expect(routes[0].requestBody?.resolved).toBe(true);
+  });
+
+  it("keeps the honest named gap when the imported file is not in the index", () => {
+    const { routes } = parseRouteFileWithDiagnostics("app/api/x/route.ts", routeImporting("@/lib/schemas"), []);
+    expect(routes[0].requestBody).toEqual({ source: "zod", schemaName: "tokenSchema", fields: [], resolved: false });
+  });
+
+  it("keeps the honest named gap for a package import (zod folder)", () => {
+    const pkg = `import { tokenSchema } from "@acme/schemas";
+export async function POST(req: Request) {
+  const body = tokenSchema.parse(await req.json());
+  return Response.json(body);
+}`;
+    const { routes } = parseRouteFileWithDiagnostics("app/api/x/route.ts", pkg, [
+      { path: "node_modules/@acme/schemas.ts", content: schemaFile.content },
+    ]);
+    expect(routes[0].requestBody).toEqual({ source: "zod", schemaName: "tokenSchema", fields: [], resolved: false });
+  });
+
+  it("does not hang or fabricate on an import cycle", () => {
+    const a = { path: "src/lib/a.ts", content: `import { b } from "./b";\nexport const a = b;` };
+    const b = { path: "src/lib/b.ts", content: `import { a } from "./a";\nexport const b = a;` };
+    const { routes } = parseRouteFileWithDiagnostics(
+      "app/api/x/route.ts",
+      `import { a } from "@/lib/a";
+export async function POST(req: Request) {
+  const body = a.parse(await req.json());
+  return Response.json(body);
+}`,
+      [a, b],
+    );
+    // Neither file defines a zod chain — named gap, no fields, no crash.
+    expect(routes[0].requestBody).toEqual({ source: "zod", schemaName: "a", fields: [], resolved: false });
+  });
+
+  it("a non-zod imported binding never gains a type", () => {
+    const helper = { path: "src/lib/notzod.ts", content: `export const thing = { parse: () => ({}) };` };
+    const { routes } = parseRouteFileWithDiagnostics(
+      "app/api/x/route.ts",
+      `import { thing } from "@/lib/notzod";
+export async function POST(req: Request) {
+  const body = thing.parse(await req.json());
+  return Response.json(body);
+}`,
+      [helper],
+    );
+    // Not provably zod: named as written, nothing claimed about fields.
+    expect(routes[0].requestBody).toEqual({ source: "zod", schemaName: "thing", fields: [], resolved: false });
+  });
+
+  it("batch parsing resolves imports across the batch without repoFiles", () => {
+    const route = {
+      path: "app/api/x/route.ts",
+      content: routeImporting("@/lib/schemas"),
+    };
+    const { routes } = parseRouteFilesWithDiagnostics([route, schemaFile]);
+    expect(routes[0].requestBody?.resolved).toBe(true);
+    expect(routes[0].requestBody?.fields.map((f) => f.name)).toEqual(["token", "scopes"]);
+  });
+
+  it("enum fields from an imported schema keep their literal values", () => {
+    const { routes } = parseRouteFileWithDiagnostics("app/api/x/route.ts", routeImporting("@/lib/schemas"), [schemaFile]);
+    const scopes = routes[0].requestBody?.fields.find((f) => f.name === "scopes");
+    expect(scopes?.type).toBe("enum: read | write[]");
+    expect(scopes?.defaultValue).toBe('["read"]');
+  });
+});

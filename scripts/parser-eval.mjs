@@ -28,7 +28,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 // Import the production parser (self-contained; type-stripped TS import).
-const { parseRouteFiles } = await import(new URL("../src/lib/route-parser.ts", import.meta.url).href);
+const { parseRouteFiles, parseRouteFilesCrossFile, schemaImportCandidates } = await import(
+  new URL("../src/lib/route-parser.ts", import.meta.url).href
+);
 
 // ---------------------------------------------------------------------------
 // Constants mirroring the production pipeline (src/lib/generation.ts)
@@ -165,7 +167,34 @@ function reportForRoot(root) {
   const underCap = contents.slice(0, MAX_FILES);
   const overCap = contents.slice(MAX_FILES);
 
-  const routes = parseRouteFiles(underCap);
+  // Cross-file schema resolution (M2): the whole tree on disk is the index.
+  // Candidates for fetching = files that exist on disk and are not already
+  // route contents. Mirrors the pipeline's bounded second round.
+  let routes = parseRouteFiles(underCap);
+  const gaps = schemaImportCandidates(routes);
+  const diskByRel = new Map(files.map((f) => [f.rel, f]));
+  const fetchable = new Map();
+  let fetchCount = 0;
+  for (const g of gaps) {
+    for (const p of g.candidatePaths) {
+      if (fetchCount >= 25) break;
+      if (underCap.some((c) => c.path === p) || fetchable.has(p)) continue;
+      if (!diskByRel.has(p)) continue;
+      fetchable.set(p, diskByRel.get(p));
+      fetchCount++;
+    }
+  }
+  if (fetchable.size > 0) {
+    const repoFiles = [...fetchable.values()].map((f) => ({ path: f.rel, content: readFileSync(f.full, "utf8") }));
+    const cross = parseRouteFilesCrossFile(underCap, repoFiles);
+    const resolvedBefore = routes.filter((r) => r.requestBody?.resolved).length;
+    const resolvedAfter = cross.routes.filter((r) => r.requestBody?.resolved).length;
+    console.log(
+      `\nCross-file resolution (M2): ${gaps.length} unresolved body schema(s) -> fetched ${repoFiles.length} file(s) -> ${resolvedAfter - resolvedBefore} additional body/bodies resolved`,
+    );
+    routes = cross.routes;
+  }
+
   const withMissingParams = routes.filter(
     (r) =>
       (r.dynamicSegments.length > 0 && r.params.length === 0) ||

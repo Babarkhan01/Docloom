@@ -5,6 +5,7 @@ import type { ParsedRoute } from "./route-parser";
 function route(partial: Partial<ParsedRoute>): ParsedRoute {
   return {
     filePath: "app/api/x/route.ts",
+    sourceContent: "",
     routePath: "/api/x",
     method: "GET",
     dynamicSegments: [],

@@ -52,7 +52,8 @@ export type RequestField = {
 /**
  * The validated request body of a handler. Present only when the handler
  * provably parses the request body through a zod schema visible in the same
- * file; otherwise the property is undefined (nothing claimed).
+ * file or one import hop into the repo file index; otherwise the property is
+ * undefined (nothing claimed).
  */
 export type ParsedRequestBody = {
   /** "zod" — the only validator family understood today. */
@@ -66,6 +67,8 @@ export type ParsedRequestBody = {
 
 export type ParsedRoute = {
   filePath: string;
+  /** Raw file contents (internal: enables the pipeline's round-2 import lookup). */
+  sourceContent: string;
   routePath: string;
   method: string | null;
   dynamicSegments: string[];
@@ -371,8 +374,8 @@ function leadingJSDoc(fn: ts.FunctionLikeDeclaration, sf: ts.SourceFile): string
 }
 
 // ---------------------------------------------------------------------------
-// Zod request-body extraction (M1) — same-file schemas only; everything
-// unresolvable is reported as such, never guessed.
+// Zod request-body extraction (M1) — same-file schemas plus one-hop imported
+// schemas (M2); everything unresolvable is reported as such, never guessed.
 // ---------------------------------------------------------------------------
 
 const ZOD_PRIMITIVE_TYPES: Record<string, string> = {
@@ -511,29 +514,204 @@ function localZodSchemas(sf: ts.SourceFile, zodNs: Set<string>): Map<string, ts.
   return map;
 }
 
+// ---------------------------------------------------------------------------
+// Cross-file schema resolution (M2) — one import hop into a repo file index.
+// Package imports, namespace imports, and files outside the index stay honest
+// named gaps; nothing is ever guessed.
+// ---------------------------------------------------------------------------
+
+/** Everything the resolver needs to know about one repo file. */
+export type ResolutionContext = {
+  filePath: string;
+  sf: ts.SourceFile;
+  zodNs: Set<string>;
+  zodSchemas: Map<string, ts.Expression>;
+  /** Static import bindings: local name -> module specifier as written. */
+  imports: Map<string, string>;
+};
+
+/** Build a resolution context for one file's contents. */
+function contextFor(filePath: string, content: string): ResolutionContext {
+  const sf = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true);
+  const zodNs = zodNamespaceNames(sf);
+  return { filePath, sf, zodNs, zodSchemas: localZodSchemas(sf, zodNs), imports: importedBindings(sf) };
+}
+
+/**
+ * Repo file index for cross-file resolution: path -> parsed context. Keyed by
+ * every path each file's specifier could resolve to (fan-out), so lookup is a
+ * single Map.get. Memoized on the files array identity — the batch API passes
+ * the same array once per route file, and parsing an index per route file
+ * would be quadratic.
+ */
+const indexCache = new WeakMap<object, Map<string, ResolutionContext>>();
+function resolutionIndex(files: { path: string; content: string }[]): Map<string, ResolutionContext> {
+  const cached = indexCache.get(files);
+  if (cached) return cached;
+  const index = new Map<string, ResolutionContext>();
+  for (const f of files) {
+    const ctx = contextFor(f.path, f.content);
+    for (const p of indexPathAliases(f.path)) index.set(p, ctx);
+  }
+  indexCache.set(files, index);
+  return index;
+}
+
+/** Index keys for a file path: itself plus the src/ and monorepo layouts its importers might use. */
+function indexPathAliases(path: string): string[] {
+  const aliases = new Set<string>([path]);
+  if (path.startsWith("src/")) aliases.add(path.slice(4));
+  else aliases.add(`src/${path}`);
+  const mono = monorepoRoot(path);
+  if (mono) {
+    aliases.add(path.slice(mono.length));
+    aliases.add(`src/${path.slice(mono.length)}`);
+  }
+  return [...aliases];
+}
+
+/**
+ * Static import bindings of a file: local name -> module specifier.
+ * Namespace imports (`import * as x`) bind a namespace, not its members —
+ * their members cannot be chased one-hop, so they are excluded (honest gap).
+ */
+function importedBindings(sf: ts.SourceFile): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+    const clause = st.importClause;
+    if (!clause) continue;
+    const spec = st.moduleSpecifier.text;
+    if (clause.name) map.set(clause.name.text, spec);
+    const b = clause.namedBindings;
+    if (b && ts.isNamedImports(b)) for (const el of b.elements) map.set(el.name.text, spec);
+  }
+  return map;
+}
+
+/** dirname/join for the forward-slash repo paths used throughout the parser. */
+function posixDirname(p: string): string {
+  const i = p.lastIndexOf("/");
+  return i === -1 ? "" : p.slice(0, i);
+}
+
+function posixJoin(dir: string, rel: string): string {
+  const out: string[] = [];
+  for (const seg of [...dir.split("/"), ...rel.split("/")]) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") out.pop();
+    else out.push(seg);
+  }
+  return out.join("/");
+}
+
+const TS_EXTENSIONS = [".ts", ".tsx", ".js", "/index.ts"];
+
+/**
+ * Repo-relative paths an import specifier could point at, in priority order.
+ * Handled: relative (`./x`, `../x`) and `@/` alias specifiers; explicit
+ * extensions, extension-less (`.ts` fan-out), TS's `.js`-means-`.ts`
+ * convention, directory `index.ts`, and both layouts Next.js allows (`src/`
+ * or repo root) plus monorepo `apps/<name>/` roots. Package imports, `#`
+ * aliases, and everything else return [] — those files are not in the repo
+ * index, so they must stay honest named gaps.
+ */
+export function importSpecifierCandidates(spec: string, fromPath: string): string[] {
+  const cleaned = spec.split("?")[0];
+  if (cleaned.startsWith("./") || cleaned.startsWith("../")) {
+    return fanOutExtensions(posixJoin(posixDirname(fromPath), cleaned), [""]);
+  }
+  if (cleaned.startsWith("@/")) {
+    const rel = cleaned.slice(2);
+    return fanOutExtensions(rel, ["", "src/", monorepoRoot(fromPath)]);
+  }
+  return [];
+}
+
+/** Repo-root prefix of the app this file belongs to (`apps/web/`), if any. */
+function monorepoRoot(fromPath: string): string {
+  const m = /^apps\/[^/]+\//.exec(fromPath);
+  return m ? m[0] : "";
+}
+
+/**
+ * One logical path -> candidate paths: explicit extension kept; otherwise
+ * .ts/.tsx/.js//index.ts fan-out, crossed with layout prefixes (deduped).
+ */
+function fanOutExtensions(path: string, prefixes: string[]): string[] {
+  const uniquePrefixes = [...new Set(prefixes)];
+  const ext = /\.[cm]?[jt]sx?$/.exec(path);
+  if (ext) {
+    const candidates = uniquePrefixes.map((p) => p + path);
+    // TS convention: `./x.js` may refer to the `.ts`/`.tsx` source.
+    if (/\.[cm]?js$/.test(path)) {
+      const stem = path.slice(0, -ext[0].length);
+      for (const p of uniquePrefixes) {
+        candidates.push(`${p}${stem}.ts`, `${p}${stem}.tsx`);
+      }
+    }
+    return candidates;
+  }
+  return uniquePrefixes.flatMap((p) => TS_EXTENSIONS.map((e) => (e.startsWith("/") ? `${p}${path}${e}` : `${p}${path}${e}`)));
+}
+
+/**
+ * Resolve a schema identifier to its defining expression, chasing same-file
+ * aliases and one import hop through the repo file index. Cycles
+ * (file::name visited twice) and depth exhaustion return null — the schema
+ * stays an honest named gap, never a partial guess. The returned expression
+ * is always a zod chain rooted in the returned context's own namespace.
+ */
+function resolveSchema(
+  name: string,
+  ctx: ResolutionContext,
+  index: Map<string, ResolutionContext>,
+  visited: Set<string>,
+  depth: number,
+): { expr: ts.Expression; ctx: ResolutionContext } | null {
+  if (depth > 6) return null;
+  const local = ctx.zodSchemas.get(name);
+  if (local) {
+    const key = `${ctx.filePath}::${name}`;
+    if (visited.has(key)) return null;
+    visited.add(key);
+    if (ts.isIdentifier(local)) return resolveSchema(local.text, ctx, index, visited, depth + 1);
+    return { expr: local, ctx };
+  }
+  const spec = ctx.imports.get(name);
+  if (!spec) return null;
+  for (const candidate of importSpecifierCandidates(spec, ctx.filePath)) {
+    const target = index.get(candidate);
+    if (!target) continue;
+    // No visited bookkeeping here: entering a file consumes nothing; the visit
+    // is recorded only when a definition in it is used (below / in the reccall).
+    return resolveSchema(name, target, index, visited, depth + 1);
+  }
+  return null;
+}
+
 /**
  * Type text for a zod schema expression, honest by construction: known roots
  * map to plain names, everything else (including identifiers that resolve to
- * imported schemas) comes back unresolved. One-hop identifier resolution
- * through same-file schema definitions; depth-bounded against cycles.
+ * imported schemas) comes back unresolved. Identifier resolution chases
+ * same-file aliases and one import hop; depth-bounded against cycles.
  */
 function zodFieldType(
   expr: ts.Expression,
-  sf: ts.SourceFile,
-  schemaMap: Map<string, ts.Expression>,
+  ctx: ResolutionContext,
+  index: Map<string, ResolutionContext>,
   depth: number,
-  zodNs: Set<string>,
 ): { type: string; typeResolved: boolean; enumValues?: string[] } {
-  if (depth > 3) return { type: "", typeResolved: false };
+  if (depth > 5) return { type: "", typeResolved: false };
   if (ts.isIdentifier(expr)) {
-    const def = schemaMap.get(expr.text);
-    if (def) return zodFieldType(def, sf, schemaMap, depth + 1, zodNs);
+    const def = resolveSchema(expr.text, ctx, index, new Set(), depth + 1);
+    if (def) return zodFieldType(def.expr, def.ctx, index, depth + 1);
     // Imported/unknown schema: keep the name as written, mark unresolved.
     return { type: "", typeResolved: false };
   }
   const chain = flattenZodChain(expr);
   // Not provably zod (e.g. `myQuery.string()`): never attribute a type.
-  if (!chain || !zodNs.has(chain.ns)) return { type: "", typeResolved: false };
+  if (!chain || !ctx.zodNs.has(chain.ns)) return { type: "", typeResolved: false };
   switch (chain.root) {
     case "enum": {
       // Accept both z.enum(["a","b"]) and the (unusual) direct-args form.
@@ -552,12 +730,12 @@ function zodFieldType(
     }
     case "literal":
       return {
-        type: chain.ctorArgs.length ? `literal: ${clean(chain.ctorArgs[0].getText(sf))}` : "",
+        type: chain.ctorArgs.length ? `literal: ${clean(chain.ctorArgs[0].getText(ctx.sf))}` : "",
         typeResolved: chain.ctorArgs.length > 0,
       };
     case "array": {
       const el = chain.ctorArgs[0]
-        ? zodFieldType(chain.ctorArgs[0], sf, schemaMap, depth + 1, zodNs)
+        ? zodFieldType(chain.ctorArgs[0], ctx, index, depth + 1)
         : { type: "", typeResolved: false };
       return { type: el.typeResolved && el.type ? `${el.type}[]` : "array", typeResolved: el.typeResolved && Boolean(el.type) };
     }
@@ -579,9 +757,8 @@ function zodFieldType(
 /** Build one RequestField from a property initializer (name assigned by caller). */
 function requestFieldFromInitializer(
   init: ts.Expression,
-  sf: ts.SourceFile,
-  schemaMap: Map<string, ts.Expression>,
-  zodNs: Set<string>,
+  ctx: ResolutionContext,
+  index: Map<string, ResolutionContext>,
 ): RequestField {
   const constraints: string[] = [];
   let optional = false;
@@ -597,13 +774,13 @@ function requestFieldFromInitializer(
         optional = true;
         constraints.push("nullable");
       } else if (call.name === "default" && call.args.length > 0) {
-        defaultValue = clean(call.args[0].getText(sf));
+        defaultValue = clean(call.args[0].getText(ctx.sf));
       } else if (ZOD_FLAG_CONSTRAINTS.has(call.name)) {
         constraints.push(call.name);
       } else if (ZOD_ARG_CONSTRAINTS.has(call.name)) {
         constraints.push(
           call.args.length
-            ? `${call.name}(${clean(call.args.map((a) => a.getText(sf)).join(", "))})`
+            ? `${call.name}(${clean(call.args.map((a) => a.getText(ctx.sf)).join(", "))})`
             : call.name,
         );
       } else if (call.name === "refine" || call.name === "superRefine" || call.name === "transform") {
@@ -611,7 +788,7 @@ function requestFieldFromInitializer(
       }
     }
   }
-  const t = zodFieldType(init, sf, schemaMap, 1, zodNs);
+  const t = zodFieldType(init, ctx, index, 1);
   return {
     name: "",
     type: t.type,
@@ -626,9 +803,8 @@ function requestFieldFromInitializer(
 /** Walk a z.object literal into fields; `complete=false` when any part is opaque (spreads, computed keys). */
 function fieldsFromZodObject(
   obj: ts.Expression,
-  sf: ts.SourceFile,
-  schemaMap: Map<string, ts.Expression>,
-  zodNs: Set<string>,
+  ctx: ResolutionContext,
+  index: Map<string, ResolutionContext>,
 ): { fields: RequestField[]; complete: boolean } {
   if (!ts.isObjectLiteralExpression(obj)) return { fields: [], complete: false };
   const fields: RequestField[] = [];
@@ -649,7 +825,7 @@ function fieldsFromZodObject(
       complete = false;
       continue;
     }
-    const field = requestFieldFromInitializer(prop.initializer, sf, schemaMap, zodNs);
+    const field = requestFieldFromInitializer(prop.initializer, ctx, index);
     fields.push({ ...field, name });
   }
   return { fields, complete };
@@ -710,25 +886,27 @@ function readsRequestJson(node: ts.Node | undefined): boolean {
 /**
  * Build the body fact from a schema expression; non-object schemas stay
  * honest (no fields). Identifier aliases are chased (depth-bounded) so
- * `const b = a` resolves to a's object literal.
+ * `const b = a` resolves to a's object literal — in the defining file, via
+ * one-hop import resolution through the repo index.
  */
 function buildRequestBody(
   schemaExprIn: ts.Expression,
   schemaName: string | null,
-  sf: ts.SourceFile,
-  schemaMap: Map<string, ts.Expression>,
-  zodNs: Set<string>,
+  ctx: ResolutionContext,
+  index: Map<string, ResolutionContext>,
 ): ParsedRequestBody {
   let schemaExpr = schemaExprIn;
+  let schemaCtx = ctx;
   for (let depth = 0; ts.isIdentifier(schemaExpr) && depth < 5; depth++) {
-    const next = schemaMap.get(schemaExpr.text);
+    const next = resolveSchema(schemaExpr.text, schemaCtx, index, new Set(), 0);
     if (!next) break;
-    schemaExpr = next;
+    schemaExpr = next.expr;
+    schemaCtx = next.ctx;
   }
   const chain = flattenZodChain(schemaExpr);
   const derived = chain ? chain.calls.some((c) => ZOD_SCHEMA_DERIVATIONS.has(c.name)) : false;
-  if (chain && zodNs.has(chain.ns) && !derived && chain.root === "object" && chain.ctorArgs[0]) {
-    const { fields, complete } = fieldsFromZodObject(chain.ctorArgs[0], sf, schemaMap, zodNs);
+  if (chain && schemaCtx.zodNs.has(chain.ns) && !derived && chain.root === "object" && chain.ctorArgs[0]) {
+    const { fields, complete } = fieldsFromZodObject(chain.ctorArgs[0], schemaCtx, index);
     return { source: "zod", schemaName, fields, resolved: complete };
   }
   // Unions / derived / dynamic schemas: named honestly, fields not claimed.
@@ -738,22 +916,25 @@ function buildRequestBody(
 /**
  * Whether a parse-callee base is provably in the zod family (or may plausibly
  * be one). Chains are checked against the file's zod imports; identifiers are
- * chased through same-file aliases, with well-known globals (JSON.parse)
- * excluded outright. Unknown identifiers stay candidates — they may be
- * imported zod schemas, which are reported as named gaps, never dropped.
+ * chased through same-file aliases and one import hop into the repo index,
+ * with well-known globals (JSON.parse) excluded outright. Unresolvable
+ * identifiers stay candidates — they may be zod schemas we cannot see, which
+ * are reported as named gaps, never dropped.
  */
-function zodRooted(expr: ts.Expression, schemaMap: Map<string, ts.Expression>, zodNs: Set<string>): boolean {
+function zodRooted(expr: ts.Expression, ctx: ResolutionContext, index: Map<string, ResolutionContext>): boolean {
   let cur: ts.Expression = expr;
+  let curCtx = ctx;
   for (let depth = 0; depth < 5; depth++) {
     if (ts.isIdentifier(cur)) {
       if (NON_SCHEMA_IDENTIFIERS.has(cur.text)) return false;
-      const next = schemaMap.get(cur.text);
+      const next = resolveSchema(cur.text, curCtx, index, new Set(), 0);
       if (!next) return true;
-      cur = next;
+      cur = next.expr;
+      curCtx = next.ctx;
       continue;
     }
     const chain = flattenZodChain(cur);
-    return Boolean(chain && zodNs.has(chain.ns));
+    return Boolean(chain && curCtx.zodNs.has(chain.ns));
   }
   return true;
 }
@@ -769,10 +950,9 @@ const BODY_PARSE_METHODS = new Set(["parse", "safeParse"]);
  */
 function extractRequestBody(
   fn: ts.FunctionLikeDeclaration,
-  sf: ts.SourceFile,
-  schemaMap: Map<string, ts.Expression>,
+  ctx: ResolutionContext,
+  index: Map<string, ResolutionContext>,
   jsonVars: Set<string>,
-  zodNs: Set<string>,
 ): ParsedRequestBody | null {
   if (!fn.body) return null;
   const bases: ts.Expression[] = [];
@@ -783,7 +963,7 @@ function extractRequestBody(
       const jsonArg = unwrapExpression(arg);
       const consumesBody = readsRequestJson(arg) || (ts.isIdentifier(jsonArg) && jsonVars.has(jsonArg.text));
       const base = n.expression.expression;
-      if (consumesBody && zodRooted(base, schemaMap, zodNs)) bases.push(base);
+      if (consumesBody && zodRooted(base, ctx, index)) bases.push(base);
     }
     ts.forEachChild(n, visit);
   };
@@ -793,7 +973,7 @@ function extractRequestBody(
   const uniq: ts.Expression[] = [];
   const seen = new Set<string>();
   for (const b of bases) {
-    const key = b.getText(sf);
+    const key = b.getText(ctx.sf);
     if (!seen.has(key)) {
       seen.add(key);
       uniq.push(b);
@@ -803,11 +983,11 @@ function extractRequestBody(
   if (uniq.length > 1) return { source: "zod", schemaName: null, fields: [], resolved: false };
   const base = uniq[0];
   if (ts.isIdentifier(base)) {
-    const def = schemaMap.get(base.text);
+    const def = resolveSchema(base.text, ctx, index, new Set(), 0);
     if (!def) return { source: "zod", schemaName: base.text, fields: [], resolved: false };
-    return buildRequestBody(def, base.text, sf, schemaMap, zodNs);
+    return buildRequestBody(def.expr, base.text, def.ctx, index);
   }
-  if (flattenZodChain(base)) return buildRequestBody(base, null, sf, schemaMap, zodNs);
+  if (flattenZodChain(base)) return buildRequestBody(base, null, ctx, index);
   return { source: "zod", schemaName: null, fields: [], resolved: false };
 }
 
@@ -815,8 +995,17 @@ function extractRequestBody(
 // File parsing
 // ---------------------------------------------------------------------------
 
-/** Parse one Next.js route file's contents into its handler facts + diagnostics. */
-export function parseRouteFileWithDiagnostics(filePath: string, content: string): RouteFileResult {
+/**
+ * Parse one Next.js route file's contents into its handler facts + diagnostics.
+ * `repoFiles` (optional) is the repo file index for one-hop cross-file schema
+ * resolution (M2): without it the parser behaves exactly as before, resolving
+ * same-file schemas only.
+ */
+export function parseRouteFileWithDiagnostics(
+  filePath: string,
+  content: string,
+  repoFiles?: { path: string; content: string }[],
+): RouteFileResult {
   const sf = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true);
   const routePath = routePathFromFilePath(filePath);
   const dyn = dynamicSegments(routePath);
@@ -827,6 +1016,8 @@ export function parseRouteFileWithDiagnostics(filePath: string, content: string)
   const zodNs = zodNamespaceNames(sf);
   const zodSchemas = localZodSchemas(sf, zodNs);
   const jsonVars = jsonBodyVariableNames(sf);
+  const ctx: ResolutionContext = { filePath, sf, zodNs, zodSchemas, imports: importedBindings(sf) };
+  const index = repoFiles ? resolutionIndex(repoFiles) : new Map<string, ResolutionContext>();
 
   for (const st of sf.statements) {
     const mods = ts.canHaveModifiers(st) ? st.modifiers : undefined;
@@ -844,9 +1035,10 @@ export function parseRouteFileWithDiagnostics(filePath: string, content: string)
     // Direct style: `export async function GET(...)` / `export const GET = async (...) => ...`
     const direct = handlerFromNode(st);
     if (direct) {
-      const body = extractRequestBody(direct.fn, sf, zodSchemas, jsonVars, zodNs);
+      const body = extractRequestBody(direct.fn, ctx, index, jsonVars);
       routes.push({
         filePath,
+        sourceContent: content,
         routePath,
         method: direct.method,
         dynamicSegments: dyn,
@@ -868,9 +1060,10 @@ export function parseRouteFileWithDiagnostics(filePath: string, content: string)
         if (ts.isCallExpression(d.initializer)) {
           const fn = resolveWrappedHandler(d.initializer, locals);
           if (fn) {
-            const body = extractRequestBody(fn, sf, zodSchemas, jsonVars, zodNs);
+            const body = extractRequestBody(fn, ctx, index, jsonVars);
             routes.push({
               filePath,
+              sourceContent: content,
               routePath,
               method: d.name.text,
               dynamicSegments: dyn,
@@ -899,11 +1092,69 @@ export function parseRouteFile(filePath: string, content: string): ParsedRoute[]
   return parseRouteFileWithDiagnostics(filePath, content).routes;
 }
 
+/**
+ * Candidate repo paths for the unresolved request-body schema names of
+ * already-parsed routes (the pipeline's round-2 fetch list). Only specifiers
+ * the resolver could actually handle (relative / `@/` alias) produce paths —
+ * package imports stay out, so every candidate is worth one blob fetch.
+ * Deduplicated; import cycles cost nothing (all candidates usually share a
+ * small set of schema files).
+ */
+export function schemaImportCandidates(
+  routes: ParsedRoute[],
+): { schemaName: string; candidatePaths: string[] }[] {
+  const out = new Map<string, Set<string>>();
+  for (const r of routes) {
+    const body = r.requestBody;
+    if (!body || body.resolved || !body.schemaName) continue;
+    // The schema name came from this file; its import lives here too. The
+    // parse-time context is gone, so the file is re-parsed — one extra TS
+    // parse per unresolved route file, bounded by the repo cap.
+    const sf = ts.createSourceFile(r.filePath, r.sourceContent, ts.ScriptTarget.Latest, true);
+    const spec = importedBindings(sf).get(body.schemaName);
+    if (!spec) continue;
+    const candidates = importSpecifierCandidates(spec, r.filePath);
+    if (candidates.length === 0) continue;
+    const set = out.get(body.schemaName) ?? new Set<string>();
+    for (const c of candidates) set.add(c);
+    out.set(body.schemaName, set);
+  }
+  return [...out.entries()].map(([schemaName, set]) => ({
+    schemaName,
+    candidatePaths: [...set],
+  }));
+}
+
+/**
+ * Parse a batch of files with cross-file schema resolution (M2): `repoFiles`
+ * is the additional repo index (fetched imported-schema files) that one-hop
+ * import lookups may enter. Route files themselves are always part of the
+ * index too, so intra-batch imports resolve as well.
+ */
+export function parseRouteFilesCrossFile(
+  files: { path: string; content: string }[],
+  repoFiles: { path: string; content: string }[],
+): RouteFileResult {
+  const routes: ParsedRoute[] = [];
+  const diagnostics: RouteFileDiagnostics = { wrappedOpaque: [] };
+  const index = resolutionIndex([...files, ...repoFiles]);
+  for (const f of files) {
+    const res = parseRouteFileWithDiagnostics(f.path, f.content, [...files, ...repoFiles]);
+    routes.push(...res.routes);
+    diagnostics.wrappedOpaque.push(...res.diagnostics.wrappedOpaque);
+  }
+  return { routes, diagnostics };
+}
+
+/**
+ * Parse a batch of files; each file doubles as the cross-file index, so a
+ * batch containing both route files and their schema files resolves imports.
+ */
 export function parseRouteFilesWithDiagnostics(files: { path: string; content: string }[]): RouteFileResult {
   const routes: ParsedRoute[] = [];
   const diagnostics: RouteFileDiagnostics = { wrappedOpaque: [] };
   for (const f of files) {
-    const res = parseRouteFileWithDiagnostics(f.path, f.content);
+    const res = parseRouteFileWithDiagnostics(f.path, f.content, files);
     routes.push(...res.routes);
     diagnostics.wrappedOpaque.push(...res.diagnostics.wrappedOpaque);
   }

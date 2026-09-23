@@ -2,7 +2,12 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "./db";
 import { generations, repos, usageCounters, users } from "./schema";
 import { fetchRepoBlob, fetchRepoTree } from "./github";
-import { parseRouteFilesWithDiagnostics, detectUnsupportedFramework } from "./route-parser";
+import {
+  parseRouteFilesWithDiagnostics,
+  parseRouteFilesCrossFile,
+  detectUnsupportedFramework,
+  schemaImportCandidates,
+} from "./route-parser";
 import { aiEnabled, describeRoutes } from "./ai";
 import { buildApiMarkdown, type GenerationCoverage } from "./docs";
 import { dailyGenerationLimitFor, effectivePlan, type Plan } from "./billing";
@@ -23,6 +28,15 @@ import { dailyGenerationLimitFor, effectivePlan, type Plan } from "./billing";
 
 const MAX_FILES = 50;
 const MAX_FILE_BYTES = 64 * 1024;
+/**
+ * Extra blob fetches allowed for cross-file schema resolution (M2): imported
+ * zod schema files fetched after the first parse pass. Bounded so a run's
+ * total (1 tree + ≤maxFiles route blobs + ≤SCHEMA_FETCH_BUDGET extra + AI + DB)
+ * stays inside the Workers subrequest budget.
+ */
+const SCHEMA_FETCH_BUDGET = 25;
+/** Cap on imported-schema file size (same rationale as MAX_FILE_BYTES). */
+const MAX_SCHEMA_FILE_BYTES = 64 * 1024;
 
 /** File cap for webhook-triggered runs (Workers Free: 50 subrequests/invocation; a run ≈ 1 tree + N blobs + AI + DB). */
 export function webhookMaxFiles(): number {
@@ -135,6 +149,8 @@ export type PipelineIo = {
   fetchBlob: typeof fetchRepoBlob;
   /** Parses fetched route files; returns routes + unresolvable-handler diagnostics. */
   parseRouteFiles: typeof parseRouteFilesWithDiagnostics;
+  /** Re-parses with cross-file schema resolution (M2); same result shape. */
+  parseRouteFilesCrossFile: typeof parseRouteFilesCrossFile;
   aiEnabled: typeof aiEnabled;
   describeRoutes: typeof describeRoutes;
 };
@@ -143,6 +159,7 @@ const defaultIo: PipelineIo = {
   fetchTree: fetchRepoTree,
   fetchBlob: fetchRepoBlob,
   parseRouteFiles: parseRouteFilesWithDiagnostics,
+  parseRouteFilesCrossFile: parseRouteFilesCrossFile,
   aiEnabled: aiEnabled,
   describeRoutes: describeRoutes,
 };
@@ -227,12 +244,41 @@ export async function executePipeline(
         : undefined;
 
     // 2. AST parse — structural facts come from the compiler, never the LLM.
+    // Cross-file schema resolution (M2): parse first, then spend a bounded
+    // second round fetching the schema files the unresolved request bodies
+    // import, and re-parse with them in the index. Repos whose schemas are all
+    // same-file pay nothing; package-import gaps are never fetched.
     const contents: { path: string; content: string }[] = [];
     for (const c of candidates) {
       const content = await io.fetchBlob(repo.installationId, repo.owner, repo.name, c.path, repo.defaultBranch);
       if (content !== null) contents.push({ path: c.path, content });
     }
-    const { routes, diagnostics } = io.parseRouteFiles(contents);
+
+    let { routes, diagnostics } = io.parseRouteFiles(contents);
+    const fetchable = schemaImportCandidates(routes);
+    const fetchCount = fetchable.reduce((n, f) => n + f.candidatePaths.length, 0);
+    if (fetchable.length > 0 && fetchCount <= SCHEMA_FETCH_BUDGET) {
+      const treePaths = new Set(tree.entries.map((e) => e.path));
+      const fetches: { path: string; content: string }[] = [];
+      let spent = 0;
+      for (const f of fetchable) {
+        for (const p of f.candidatePaths) {
+          if (spent >= SCHEMA_FETCH_BUDGET) break;
+          if (contents.some((c) => c.path === p)) continue; // already in hand
+          if (!treePaths.has(p)) continue; // not a real file in this repo
+          const content = await io.fetchBlob(repo.installationId, repo.owner, repo.name, p, repo.defaultBranch);
+          spent++;
+          if (content !== null && Buffer.byteLength(content, "utf8") <= MAX_SCHEMA_FILE_BYTES) {
+            fetches.push({ path: p, content });
+          }
+        }
+      }
+      if (fetches.length > 0) {
+        const round2 = io.parseRouteFilesCrossFile(contents, fetches);
+        routes = round2.routes;
+        diagnostics = round2.diagnostics;
+      }
+    }
 
     // Honest unsupported-framework note (user-approved scope): when nothing
     // parsed AND the source shows Express/Fastify/NestJS registrations, say so

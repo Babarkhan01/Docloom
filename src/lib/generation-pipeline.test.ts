@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { executePipeline, type GenerationStore, type PipelineIo } from "./generation";
+import { parseRouteFilesWithDiagnostics } from "./route-parser";
 import type { ParsedRoute } from "./route-parser";
 import type { RepoTreeEntry } from "./github";
 
@@ -83,6 +84,7 @@ function fakeIo(
       return blobs[path] ?? null;
     },
     parseRouteFiles: () => ({ routes, diagnostics }),
+    parseRouteFilesCrossFile: (files, repoFiles) => parseRouteFilesWithDiagnostics([...files, ...repoFiles]),
     aiEnabled: () => false,
     async describeRoutes() {
       throw new Error("describeRoutes must not be called when AI is disabled");
