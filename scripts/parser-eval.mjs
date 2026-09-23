@@ -194,6 +194,17 @@ function reportForRoot(root) {
   }
   console.log(`Routes with opaque (unresolved-name) param types: ${withOpaqueTypes.length}`);
 
+  const withBody = routes.filter((r) => r.requestBody);
+  const bodyResolved = withBody.filter((r) => r.requestBody.resolved && r.requestBody.fields.length > 0);
+  const bodyNamedGap = withBody.filter((r) => !r.requestBody.resolved);
+  console.log(
+    `Request bodies (M1): ${withBody.length} detected | ${bodyResolved.length} fully resolved | ${bodyNamedGap.length} named-but-external schema ("not documented in source")`,
+  );
+  for (const r of withBody.slice(0, 8)) {
+    const fields = r.requestBody.resolved ? r.requestBody.fields.map((f) => f.name).join(", ") : "(external schema)";
+    console.log(`  ${(r.method ?? "?").padEnd(6)} ${r.routePath} <- ${r.requestBody.schemaName ?? "inline"}: ${fields}`);
+  }
+
   console.log(
     `\nSkipped: too-large ${tooLarge.length} | unreadable ${unreadable.length} | over-cap ${overCap.length}`,
   );

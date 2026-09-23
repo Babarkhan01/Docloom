@@ -9,6 +9,9 @@ import type { RouteCoverageSummary } from "@/lib/docs";
 export function CoverageLine({ coverage }: { coverage: RouteCoverageSummary }) {
   if (coverage.total <= 0) return null;
   const parts: string[] = [`${coverage.total} endpoint${coverage.total === 1 ? "" : "s"}`];
+  if (coverage.withRequestBody > 0) {
+    parts.push(`${coverage.withRequestBody} with request body${coverage.withRequestBody === 1 ? "" : "s"}`);
+  }
   if (coverage.untypedParams > 0) {
     parts.push(`${coverage.untypedParams} with untyped param${coverage.untypedParams === 1 ? "" : "s"}`);
   }

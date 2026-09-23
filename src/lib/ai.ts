@@ -34,6 +34,14 @@ export async function describeRoutes(routes: ParsedRoute[]): Promise<DescribeRes
     routeContextParams: r.params,
     readsRequest: r.hasRequestUsage,
     returnsResponse: r.returnsResponse,
+    // Schema name + field names only — prose is grounded on these, never asked
+    // to invent structure.
+    requestBody: r.requestBody
+      ? {
+          schema: r.requestBody.schemaName,
+          fields: r.requestBody.resolved ? r.requestBody.fields.map((f) => f.name) : null,
+        }
+      : undefined,
     jsdoc: r.jsdoc,
   }));
 

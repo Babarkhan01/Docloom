@@ -146,6 +146,24 @@ export function buildApiMarkdown(
       } else {
         lines.push("- Route context: none");
       }
+      if (r.requestBody) {
+        lines.push(`- Request body (zod${r.requestBody.schemaName ? `: \`${r.requestBody.schemaName}\`` : ""})`);
+        if (r.requestBody.resolved && r.requestBody.fields.length > 0) {
+          for (const f of r.requestBody.fields) {
+            const typeText = f.typeResolved && f.type ? `\`${f.type}\`` : "not documented in source";
+            const extras: string[] = [];
+            if (f.optional) extras.push("optional");
+            if (f.defaultValue !== undefined) extras.push(`default \`${f.defaultValue}\``);
+            for (const c of f.constraints) extras.push(`\`${c}\``);
+            const suffix = extras.length ? ` — ${extras.join(", ")}` : "";
+            lines.push(`  - \`${f.name}\`: ${typeText}${suffix}`);
+          }
+        } else if (r.requestBody.schemaName) {
+          lines.push(`  - Fields: not documented in source (schema \`${r.requestBody.schemaName}\` could not be resolved to plain fields)`);
+        } else {
+          lines.push("  - Fields: not documented in source");
+        }
+      }
       lines.push(`- Reads the request: ${r.hasRequestUsage ? "yes" : "no"}`);
       lines.push(`- Returns a Response: ${r.returnsResponse ? "yes" : "no"}`);
       if (r.exportedSymbols.length) {
@@ -163,12 +181,14 @@ export function routeCoverageCounts(routes: ParsedRoute[]): {
   incompleteParams: number;
   opaqueTypes: number;
   wrapped: number;
+  withRequestBody: number;
 } {
   return {
     total: routes.length,
     incompleteParams: routes.filter((r) => r.dynamicSegments.length > 0 && r.params.length === 0).length,
     opaqueTypes: routes.filter((r) => r.params.some((p) => !p.typeResolved)).length,
     wrapped: routes.filter((r) => r.wrapped === true).length,
+    withRequestBody: routes.filter((r) => r.requestBody !== undefined && r.requestBody !== null).length,
   };
 }
 
@@ -177,6 +197,7 @@ export type RouteCoverageSummary = {
   total: number;
   untypedParams: number;
   wrapped: number;
+  withRequestBody: number;
 };
 
 /**
@@ -192,15 +213,20 @@ export type RouteCoverageSummary = {
 export function coverageSummaryFromMarkdown(markdown: string): RouteCoverageSummary {
   const totalMatch = markdown.match(/^## Endpoints \((\d+)\)$/m);
   const total = totalMatch ? Number(totalMatch[1]) : 0;
-  if (!totalMatch || !Number.isFinite(total) || total <= 0) return { total: 0, untypedParams: 0, wrapped: 0 };
+  if (!totalMatch || !Number.isFinite(total) || total <= 0) {
+    return { total: 0, untypedParams: 0, wrapped: 0, withRequestBody: 0 };
+  }
 
   // Detail sections only — the Reference part, so the summary table (which
   // contains none of these lines) can't inflate the counts.
   const referenceIdx = markdown.indexOf("\n## Reference");
   const reference = referenceIdx >= 0 ? markdown.slice(referenceIdx) : "";
-  const untypedParams = reference.split("\n").filter((l) => /^\s+- `[^`]+` \((?:url|context)\): not documented in source$/.test(l)).length;
+  const referenceLines = reference.split("\n");
+  const untypedParams = referenceLines.filter((l) => /^\s+- `[^`]+` \((?:url|context)\): not documented in source$/.test(l)).length;
   // Handler lines are top-level list items (column 0); param lines are nested.
-  const wrapped = reference.split("\n").filter((l) => /^\s*- Handler: wrapped via `.+`$/.test(l)).length;
+  const wrapped = referenceLines.filter((l) => /^\s*- Handler: wrapped via `.+`$/.test(l)).length;
+  // "- Request body (zod…)" marks an endpoint with a validated body fact.
+  const withRequestBody = referenceLines.filter((l) => /^\s*- Request body \(zod/.test(l)).length;
 
-  return { total, untypedParams, wrapped };
+  return { total, untypedParams, wrapped, withRequestBody };
 }

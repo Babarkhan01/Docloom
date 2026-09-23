@@ -33,17 +33,30 @@ describe("coverageSummaryFromMarkdown", () => {
     ];
     const markdown = buildApiMarkdown("o/r", "main", routes, new Map());
     const summary = coverageSummaryFromMarkdown(markdown);
-    expect(summary).toEqual({ total: 3, untypedParams: 1, wrapped: 1 });
+    expect(summary).toEqual({ total: 3, untypedParams: 1, wrapped: 1, withRequestBody: 0 });
   });
 
   it("counts zero for a draft with no untyped params and no wrapped handlers", () => {
     const markdown = buildApiMarkdown("o/r", "main", [route({ routePath: "/api/ping" })], new Map());
-    expect(coverageSummaryFromMarkdown(markdown)).toEqual({ total: 1, untypedParams: 0, wrapped: 0 });
+    expect(coverageSummaryFromMarkdown(markdown)).toEqual({ total: 1, untypedParams: 0, wrapped: 0, withRequestBody: 0 });
+  });
+
+  it("counts request-body facts from rendered Request body lines", () => {
+    const routes = [
+      route({
+        routePath: "/api/tokens",
+        method: "POST",
+        requestBody: { source: "zod" as const, schemaName: "bodySchema", resolved: true, fields: [{ name: "name", type: "string", optional: false, constraints: [], typeResolved: true }] },
+      }),
+      route({ routePath: "/api/ping", method: "GET" }),
+    ];
+    const markdown = buildApiMarkdown("o/r", "main", routes, new Map());
+    expect(coverageSummaryFromMarkdown(markdown)).toEqual({ total: 2, untypedParams: 0, wrapped: 0, withRequestBody: 1 });
   });
 
   it("returns all-zero for an empty draft (no endpoints heading)", () => {
     const markdown = buildApiMarkdown("o/r", "main", [], new Map());
-    expect(coverageSummaryFromMarkdown(markdown)).toEqual({ total: 0, untypedParams: 0, wrapped: 0 });
+    expect(coverageSummaryFromMarkdown(markdown)).toEqual({ total: 0, untypedParams: 0, wrapped: 0, withRequestBody: 0 });
   });
 
   it("does not count table rows or summary lines — only Reference detail lines", () => {
@@ -64,11 +77,11 @@ describe("coverageSummaryFromMarkdown", () => {
     );
     const summary = coverageSummaryFromMarkdown(markdown);
     // One parameter line + one wrapped line, despite the endpoint table also mentioning the path.
-    expect(summary).toEqual({ total: 1, untypedParams: 1, wrapped: 1 });
+    expect(summary).toEqual({ total: 1, untypedParams: 1, wrapped: 1, withRequestBody: 0 });
   });
 
   it("never guesses on malformed markdown (all zeros)", () => {
-    expect(coverageSummaryFromMarkdown("not a docloom draft")).toEqual({ total: 0, untypedParams: 0, wrapped: 0 });
-    expect(coverageSummaryFromMarkdown("")).toEqual({ total: 0, untypedParams: 0, wrapped: 0 });
+    expect(coverageSummaryFromMarkdown("not a docloom draft")).toEqual({ total: 0, untypedParams: 0, wrapped: 0, withRequestBody: 0 });
+    expect(coverageSummaryFromMarkdown("")).toEqual({ total: 0, untypedParams: 0, wrapped: 0, withRequestBody: 0 });
   });
 });

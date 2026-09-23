@@ -4,9 +4,17 @@ import {
   parseRouteFilesWithDiagnostics,
   detectUnsupportedFramework,
   routePathFromFilePath,
+  type ParsedRoute,
 } from "./route-parser";
 
 const APP_FILE = "app/api/users/[id]/route.ts";
+
+/** Parse and unwrap a single-route file (tests below parse one handler each). */
+function parseRouteFileToRoute(filePath: string, src: string): ParsedRoute {
+  const { routes } = parseRouteFileWithDiagnostics(filePath, src);
+  expect(routes).toHaveLength(1);
+  return routes[0];
+}
 
 describe("routePathFromFilePath", () => {
   it("strips app/ and route.ts and strips route groups", () => {
@@ -110,6 +118,133 @@ export const GET = handler;`;
     const { routes, diagnostics } = parseRouteFileWithDiagnostics("app/api/y/route.ts", src);
     expect(routes).toHaveLength(0);
     expect(diagnostics.wrappedOpaque).toEqual([{ method: "GET", filePath: "app/api/y/route.ts" }]);
+  });
+});
+
+describe("zod request-body extraction (M1)", () => {
+  it("extracts an inline z.object schema with chained constraints", () => {
+    const src = `import { z } from "zod";
+export async function POST(req: Request) {
+  const body = z.object({
+    email: z.string().email().max(50),
+    age: z.number().int().min(0).optional(),
+  }).parse(await req.json());
+  return Response.json({ ok: true });
+}`;
+    const { routes } = parseRouteFileWithDiagnostics("app/api/x/route.ts", src);
+    expect(routes[0].requestBody).toEqual({
+      source: "zod",
+      schemaName: null,
+      resolved: true,
+      fields: [
+        { name: "email", type: "string", optional: false, constraints: ["email", "max(50)"], enumValues: undefined, defaultValue: undefined, typeResolved: true },
+        { name: "age", type: "number", optional: true, constraints: ["int", "min(0)"], enumValues: undefined, defaultValue: undefined, typeResolved: true },
+      ],
+    });
+  });
+
+  it("resolves a named same-file schema referenced via .parse()", () => {
+    const src = `import { z } from "zod";
+const bodySchema = z.object({
+  name: z.string().min(1),
+  role: z.enum(["admin", "viewer"]).default("viewer"),
+});
+export async function POST(req: Request) {
+  const body = bodySchema.parse(await req.json());
+  return Response.json(body);
+}`;
+    const { routes } = parseRouteFileWithDiagnostics("app/api/x/route.ts", src);
+    expect(routes[0].requestBody?.schemaName).toBe("bodySchema");
+    expect(routes[0].requestBody?.resolved).toBe(true);
+    expect(routes[0].requestBody?.fields).toEqual([
+      { name: "name", type: "string", optional: false, constraints: ["min(1)"], enumValues: undefined, defaultValue: undefined, typeResolved: true },
+      { name: "role", type: "enum: admin | viewer", optional: false, constraints: [], enumValues: ["admin", "viewer"], defaultValue: '"viewer"', typeResolved: true },
+    ]);
+  });
+
+  it("resolves z.infer-style value references through one-hop same-file lookup", () => {
+    const src = `import { z } from "zod";
+const inputSchema = z.object({ id: z.string().uuid(), tags: z.array(z.string()).max(5) });
+const bodySchema = inputSchema;
+export async function POST(req: Request) {
+  const body = bodySchema.parse(await req.json());
+  return Response.json(body);
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.requestBody?.resolved).toBe(true);
+    expect(route.requestBody?.fields.map((f) => f.name)).toEqual(["id", "tags"]);
+  });
+
+  it("names an imported schema honestly without inventing fields", () => {
+    const src = `import { tokenSchema } from "@/lib/zod/schemas/token";
+import { z } from "zod";
+export async function POST(req: Request) {
+  const body = tokenSchema.parse(await req.json());
+  return Response.json(body);
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.requestBody).toEqual({
+      source: "zod",
+      schemaName: "tokenSchema",
+      fields: [],
+      resolved: false,
+    });
+  });
+
+  it("treats a dynamically-built schema as unresolved, never guessed", () => {
+    const src = `import { z } from "zod";
+const base = { q: z.string() };
+export async function POST(req: Request) {
+  const dyn = z.object(base).extend({ extra: z.string() });
+  const body = dyn.parse(await req.json());
+  return Response.json(body);
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    // The schema exists and is named (dyn) but is derived (extend) — named honestly, fields not claimed.
+    expect(route.requestBody).toEqual({ source: "zod", schemaName: "dyn", fields: [], resolved: false });
+  });
+
+  it("claims nothing when no parse call consumes the request json", () => {
+    const src = `export async function GET() { return Response.json({}); }`;
+    const route = parseRouteFileToRoute("app/api/y/route.ts", src);
+    expect(route.requestBody).toBeUndefined();
+  });
+
+  it("resolves a one-hop const x = await req.json() variable", () => {
+    const src = `import { z } from "zod";
+const schema = z.object({ q: z.string() });
+export async function POST(req: Request) {
+  const json = await req.json();
+  const body = schema.parse(json);
+  return Response.json(body);
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.requestBody?.resolved).toBe(true);
+    expect(route.requestBody?.fields.map((f) => f.name)).toEqual(["q"]);
+  });
+
+  it("wrapped handlers get body extraction through the resolved callback", () => {
+    const src = `import { z } from "zod";
+export const POST = withAuth(async (req) => {
+  const body = z.object({ title: z.string() }).parse(await req.json());
+  return Response.json(body);
+});`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.requestBody?.resolved).toBe(true);
+    expect(route.requestBody?.fields.map((f) => f.name)).toEqual(["title"]);
+  });
+
+  it("ambiguous multi-parse handlers stay unresolved", () => {
+    const src = `import { z } from "zod";
+const a = z.object({ x: z.string() });
+const b = z.object({ y: z.string() });
+export async function POST(req: Request) {
+  const body = a.parse(await req.json());
+  const extra = b.parse(await req.json());
+  return Response.json({ body, extra });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.requestBody).toEqual({ source: "zod", schemaName: null, fields: [], resolved: false });
   });
 });
 
