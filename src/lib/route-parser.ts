@@ -75,6 +75,31 @@ export type ResponseField = {
 };
 
 /**
+ * One query-string or header input of a handler (M4), as written in source.
+ * A plain `searchParams.get("page")` proves the name; a matching field in a
+ * same-file/imported zod schema additionally proves a type. Dynamic names are
+ * reported but never guessed.
+ */
+export type ParsedInput = {
+  /** "query" = URL query string (searchParams), "header" = request headers. */
+  kind: "query" | "header";
+  /** Parameter/header name as written. Empty when the name is not a static string. */
+  name: string;
+  /** False when the name is dynamic (variable, template with expressions) — never guessed. */
+  nameResolved: boolean;
+  /** True when the name matches a field of a zod schema visible to the resolver. */
+  typed: boolean;
+  /** Schema identifier providing the type, when typed; null otherwise. */
+  schemaName: string | null;
+  /** zod-derived type when typed and resolvable; empty otherwise. */
+  type: string;
+  /** False when the type could not be resolved from source (never guessed). */
+  typeResolved: boolean;
+  /** True when read with getAll (repeated values expected). */
+  multi: boolean;
+};
+
+/**
  * One response shape of a handler (M3): what a `return` provably produces.
  * A handler can return several (success + error branches); each return that
  * yields a provable fact contributes one shape, deduplicated, in source order.
@@ -111,6 +136,8 @@ export type ParsedRoute = {
   requestBody?: ParsedRequestBody | null;
   /** Provable response shapes (M3), in source order, deduplicated; absent = nothing claimed beyond `returnsResponse`. */
   responses?: ResponseShape[];
+  /** Query/header inputs read in source (M4); absent = no provable inputs. */
+  inputs?: ParsedInput[];
 };
 
 /** Per-file facts the parser could see but not resolve — never dropped silently. */
@@ -1358,6 +1385,189 @@ function responsesOf(
 }
 
 // ---------------------------------------------------------------------------
+// Query & header input extraction (M4) — searchParams reads, headers reads,
+// and type enrichment through matching zod schema fields (M1/M2 machinery).
+// Dynamic names and unresolvable types stay honest; nothing is guessed.
+// ---------------------------------------------------------------------------
+
+/** Name text of a `.get(...)`/`.getAll(...)` argument as written, or null. */
+function inputNameArg(call: ts.CallExpression): { name: string; nameResolved: boolean } {
+  const arg = call.arguments[0];
+  if (!arg) return { name: "", nameResolved: false };
+  const u = unwrapExpression(arg);
+  if (ts.isStringLiteral(u) || ts.isNoSubstitutionTemplateLiteral(u)) return { name: u.text, nameResolved: true };
+  if (ts.isTemplateExpression(u)) return { name: clean(u.getText()), nameResolved: false };
+  return { name: clean(u.getText()), nameResolved: false };
+}
+
+/**
+ * The zod schema fields visible to the resolver, for matching input names
+ * against: `{ schemaName, fields: {name, type, typeResolved} }[]`. Walks all
+ * same-file zod object schemas plus every import binding resolvable through
+ * the M2 index, so `searchParams.get("page")` + `querySchema` (same file OR
+ * imported) enrich each other. Bounded by resolveSchema's depth/cycle rules.
+ */
+function visibleSchemaFields(
+  ctx: ResolutionContext,
+  index: Map<string, ResolutionContext>,
+): { schemaName: string; fields: Map<string, { type: string; typeResolved: boolean }> }[] {
+  const out: { schemaName: string; fields: Map<string, { type: string; typeResolved: boolean }> }[] = [];
+  const seen = new Set<string>();
+  const collect = (name: string, defCtx: ResolutionContext, expr: ts.Expression): void => {
+    const key = `${defCtx.filePath}::${name}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const built = buildRequestBody(expr, name, defCtx, index);
+    if (!built.fields.length) return;
+    const fields = new Map<string, { type: string; typeResolved: boolean }>();
+    for (const f of built.fields) fields.set(f.name, { type: f.type, typeResolved: f.typeResolved && f.type !== "" });
+    out.push({ schemaName: name, fields });
+  };
+  for (const [name, expr] of ctx.zodSchemas) collect(name, ctx, expr);
+  for (const [localName, spec] of ctx.imports) {
+    for (const candidate of importSpecifierCandidates(spec, ctx.filePath)) {
+      const target = index.get(candidate);
+      if (!target) continue;
+      const def = resolveSchema(localName, target, index, new Set(), 0);
+      if (def) collect(localName, def.ctx, def.expr);
+      break;
+    }
+  }
+  return out;
+}
+
+/** Enrich an input with type info from a matching schema field. */
+function typedInput(
+  kind: "query" | "header",
+  n: { name: string; nameResolved: boolean },
+  multi: boolean,
+  schemas: { schemaName: string; fields: Map<string, { type: string; typeResolved: boolean }> }[],
+): ParsedInput {
+  const base: ParsedInput = { kind, name: n.name, nameResolved: n.nameResolved, typed: false, schemaName: null, type: "", typeResolved: false, multi };
+  if (!n.nameResolved || !n.name) return base;
+  for (const s of schemas) {
+    const f = s.fields.get(n.name);
+    if (f) {
+      return { ...base, typed: true, schemaName: s.schemaName, type: f.type, typeResolved: f.typeResolved };
+    }
+  }
+  return base;
+}
+
+/**
+ * All provable query/header reads of a handler. Patterns recognized (the ones
+ * a human greps for): `req.nextUrl.searchParams` (Next.js), `req.url`-based
+ * `new URL(...)` (web standard), plain `searchParams` identifiers (bounds
+ * apply), `req.headers.get(...)`, and their aliased one-hop bindings. Names
+ * come from `.get(...)`/`.getAll(...)` arguments as written; dynamic names are
+ * reported with nameResolved=false, never guessed.
+ */
+function extractRequestInputs(
+  fn: ts.FunctionLikeDeclaration,
+  ctx: ResolutionContext,
+  index: Map<string, ResolutionContext>,
+): ParsedInput[] {
+  if (!fn.body) return [];
+  const schemas = visibleSchemaFields(ctx, index);
+  const raw: { kind: "query" | "header"; name: string; nameResolved: boolean; multi: boolean }[] = [];
+
+  // True when the expression provably denotes the handler's request object —
+  // `req`/`request` itself or a chain rooted at it (`req.nextUrl`).
+  const isRequestObj = (e: ts.Expression): boolean => {
+    const u = unwrapExpression(e);
+    if (ts.isIdentifier(u)) return u.text === "req" || u.text === "request";
+    if (ts.isPropertyAccessExpression(u) && u.name.text === "nextUrl") return isRequestObj(u.expression);
+    return false;
+  };
+
+  const visit = (n: ts.Node): void => {
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression)) {
+      const method = n.expression.name.text;
+      if (method === "get" || method === "getAll") {
+        const target = n.expression.expression;
+        const tu = unwrapExpression(target);
+        if (ts.isPropertyAccessExpression(tu)) {
+          const tail = tu.name.text;
+          const base = tu.expression;
+          const isQueryTarget =
+            (tail === "searchParams" && isRequestObj(base)) || // req.nextUrl.searchParams
+            (tail === "searchParams" && isNewUrlRequest(base)) || // new URL(req.url).searchParams
+            (ts.isIdentifier(base) && searchParamsVars.has(base.text)); // const sp = ... searchParams / aliases
+          const isHeaderTarget = tail === "headers" && isRequestObj(base);
+          if (isQueryTarget || isHeaderTarget) {
+            raw.push({ kind: isHeaderTarget ? "header" : "query", ...inputNameArg(n), multi: method === "getAll" });
+          }
+        } else if (ts.isIdentifier(tu) && searchParamsVars.has(tu.text)) {
+          raw.push({ kind: "query", ...inputNameArg(n), multi: method === "getAll" });
+        }
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+
+  // True for `new URL(req.url)` / `new URL(request.url)` — a URL built from
+  // the handler's own request, hence its searchParams belong to it.
+  const isNewUrlRequest = (e: ts.Expression): boolean => {
+    const u = unwrapExpression(e);
+    if (!ts.isNewExpression(u) || !ts.isIdentifier(u.expression) || u.expression.text !== "URL" || !u.arguments?.length) return false;
+    const arg = unwrapExpression(u.arguments[0]);
+    return ts.isPropertyAccessExpression(arg) && arg.name.text === "url" && isRequestObj(arg.expression);
+  };
+
+  // Bindings that denote a URLSearchParams object — only counted when they
+  // provably derive from the request (directly or one alias hop).
+  const searchParamsVars = new Set<string>(["searchParams"]);
+  const aliasOfSearchParams = new Map<string, string>();
+  const bindVisit = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
+      const u = unwrapExpression(n.initializer);
+      // const sp = req.nextUrl.searchParams / new URL(req.url).searchParams
+      if (ts.isPropertyAccessExpression(u) && u.name.text === "searchParams") {
+        const base = unwrapExpression(u.expression);
+        if (isRequestObj(base)) searchParamsVars.add(n.name.text);
+        else if (
+          ts.isPropertyAccessExpression(base) &&
+          base.name.text === "searchParams" &&
+          isRequestObj(unwrapExpression(base.expression))
+        ) {
+          // alias of an already-bound chain: const sp2 = req.nextUrl.searchParams
+          searchParamsVars.add(n.name.text);
+        } else if (ts.isNewExpression(base) && ts.isIdentifier(base.expression) && base.expression.text === "URL" && base.arguments?.length) {
+          const urlArg = unwrapExpression(base.arguments[0]);
+          if (
+            ts.isPropertyAccessExpression(urlArg) &&
+            urlArg.name.text === "url" &&
+            isRequestObj(urlArg.expression)
+          ) {
+            searchParamsVars.add(n.name.text);
+          }
+        }
+      }
+      // one-hop alias: const params = otherSp;
+      if (ts.isIdentifier(u) && searchParamsVars.has(u.text)) {
+        aliasOfSearchParams.set(n.name.text, u.text);
+        searchParamsVars.add(n.name.text);
+      }
+    }
+    ts.forEachChild(n, bindVisit);
+  };
+  bindVisit(fn.body);
+  visit(fn.body);
+
+  // Deduplicate (same kind+name+multi read twice = one input), keep order.
+  const seen = new Set<string>();
+  const uniq: typeof raw = [];
+  for (const r of raw) {
+    const key = `${r.kind}:${r.name}:${r.multi}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniq.push(r);
+    }
+  }
+  return uniq.map((r) => typedInput(r.kind, r, r.multi, schemas));
+}
+
+// ---------------------------------------------------------------------------
 // File parsing
 // ---------------------------------------------------------------------------
 
@@ -1411,6 +1621,7 @@ export function parseRouteFileWithDiagnostics(
     if (direct) {
       const body = extractRequestBody(direct.fn, ctx, index, jsonVars);
       const responses = responsesOf(direct.fn, ctx, index);
+      const inputs = extractRequestInputs(direct.fn, ctx, index);
       routes.push({
         filePath,
         sourceContent: content,
@@ -1423,6 +1634,7 @@ export function parseRouteFileWithDiagnostics(
         jsdoc: leadingJSDoc(direct.fn, sf),
         ...(body ? { requestBody: body } : {}),
         ...(responses.length > 0 ? { responses } : {}),
+        ...(inputs.length > 0 ? { inputs } : {}),
         exportedSymbols,
       });
       continue;
@@ -1438,6 +1650,7 @@ export function parseRouteFileWithDiagnostics(
           if (fn) {
             const body = extractRequestBody(fn, ctx, index, jsonVars);
             const responses = responsesOf(fn, ctx, index);
+            const inputs = extractRequestInputs(fn, ctx, index);
             routes.push({
               filePath,
               sourceContent: content,
@@ -1450,6 +1663,7 @@ export function parseRouteFileWithDiagnostics(
               jsdoc: leadingJSDoc(fn, sf),
               ...(body ? { requestBody: body } : {}),
               ...(responses.length > 0 ? { responses } : {}),
+              ...(inputs.length > 0 ? { inputs } : {}),
               exportedSymbols,
               wrapped: true,
               wrappedVia: clean(d.initializer.expression.getText(sf)),

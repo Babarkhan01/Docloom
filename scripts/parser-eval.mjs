@@ -246,6 +246,16 @@ function reportForRoot(root) {
     console.log(`  ${(r.method ?? "?").padEnd(6)} ${r.routePath} -> ${summary}`);
   }
 
+  const withInputs = routes.filter((r) => (r.inputs?.length ?? 0) > 0);
+  const inputsTyped = withInputs.filter((r) => r.inputs.some((i) => i.typed && i.typeResolved));
+  console.log(
+    `Query/header inputs (M4): ${withInputs.length} routes with provable reads | ${inputsTyped.length} with ≥1 schema-typed input | ${withInputs.reduce((n, r) => n + r.inputs.length, 0)} inputs total`,
+  );
+  for (const r of withInputs.slice(0, 8)) {
+    const summary = r.inputs.map((i) => `${i.kind[0]}:${i.nameResolved ? i.name : "(dynamic)"}${i.typed ? "*" : ""}`).join(", ");
+    console.log(`  ${(r.method ?? "?").padEnd(6)} ${r.routePath} <- ${summary}`);
+  }
+
   console.log(
     `\nSkipped: too-large ${tooLarge.length} | unreadable ${unreadable.length} | over-cap ${overCap.length}`,
   );

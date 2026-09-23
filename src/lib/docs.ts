@@ -181,6 +181,26 @@ export function buildApiMarkdown(
           }
         }
       }
+      if (r.inputs && r.inputs.length > 0) {
+        const render = (kind: "query" | "header", label: string): void => {
+          const list = r.inputs!.filter((i) => i.kind === kind);
+          if (list.length === 0) return;
+          lines.push(`- ${label}:`);
+          for (const i of list) {
+            const nameText = i.nameResolved && i.name ? `\`${i.name}\`` : "not documented in source";
+            if (i.typed && i.typeResolved && i.type) {
+              const multi = i.multi ? " (repeated)" : "";
+              lines.push(`  - ${nameText}${multi}: \`${i.type}\``);
+            } else {
+              const extra = i.multi ? " (repeated)" : "";
+              const schema = i.schemaName ? ` (schema \`${i.schemaName}\` matched the name but could not be resolved to a type)` : "";
+              lines.push(`  - ${nameText}${extra}: type not documented in source${schema}`);
+            }
+          }
+        };
+        render("query", "Query parameters");
+        render("header", "Headers");
+      }
       lines.push(`- Reads the request: ${r.hasRequestUsage ? "yes" : "no"}`);
       lines.push(`- Returns a Response: ${r.returnsResponse ? "yes" : "no"}`);
       if (r.exportedSymbols.length) {
@@ -200,6 +220,7 @@ export function routeCoverageCounts(routes: ParsedRoute[]): {
   wrapped: number;
   withRequestBody: number;
   withResponses: number;
+  withInputs: number;
 } {
   return {
     total: routes.length,
@@ -208,6 +229,7 @@ export function routeCoverageCounts(routes: ParsedRoute[]): {
     wrapped: routes.filter((r) => r.wrapped === true).length,
     withRequestBody: routes.filter((r) => r.requestBody !== undefined && r.requestBody !== null).length,
     withResponses: routes.filter((r) => (r.responses?.length ?? 0) > 0).length,
+    withInputs: routes.filter((r) => (r.inputs?.length ?? 0) > 0).length,
   };
 }
 
@@ -218,6 +240,7 @@ export type RouteCoverageSummary = {
   wrapped: number;
   withRequestBody: number;
   withResponses: number;
+  withInputs: number;
 };
 
 /**
@@ -234,7 +257,7 @@ export function coverageSummaryFromMarkdown(markdown: string): RouteCoverageSumm
   const totalMatch = markdown.match(/^## Endpoints \((\d+)\)$/m);
   const total = totalMatch ? Number(totalMatch[1]) : 0;
   if (!totalMatch || !Number.isFinite(total) || total <= 0) {
-    return { total: 0, untypedParams: 0, wrapped: 0, withRequestBody: 0, withResponses: 0 };
+    return { total: 0, untypedParams: 0, wrapped: 0, withRequestBody: 0, withResponses: 0, withInputs: 0 };
   }
 
   // Detail sections only — the Reference part, so the summary table (which
@@ -249,6 +272,8 @@ export function coverageSummaryFromMarkdown(markdown: string): RouteCoverageSumm
   const withRequestBody = referenceLines.filter((l) => /^\s*- Request body \(zod/.test(l)).length;
   // "- Responses (N):" marks an endpoint with at least one provable response shape.
   const withResponses = referenceLines.filter((l) => /^\s*- Responses \(\d+\):$/.test(l)).length;
+  // "- Query parameters:" / "- Headers:" mark an endpoint with provable inputs.
+  const withInputs = referenceLines.filter((l) => /^\s*- (?:Query parameters|Headers):$/.test(l)).length;
 
-  return { total, untypedParams, wrapped, withRequestBody, withResponses };
+  return { total, untypedParams, wrapped, withRequestBody, withResponses, withInputs };
 }

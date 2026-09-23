@@ -49,6 +49,14 @@ export async function describeRoutes(routes: ParsedRoute[]): Promise<DescribeRes
           fields: s.resolved ? s.fields.map((f) => f.name) : null,
         }))
       : undefined,
+    // Query/header inputs: names + proven types only.
+    inputs: r.inputs?.length
+      ? r.inputs.map((i) => ({
+          kind: i.kind,
+          name: i.nameResolved ? i.name : null,
+          type: i.typed && i.typeResolved ? i.type : null,
+        }))
+      : undefined,
     jsdoc: r.jsdoc,
   }));
 

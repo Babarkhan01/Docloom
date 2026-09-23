@@ -15,6 +15,9 @@ export function CoverageLine({ coverage }: { coverage: RouteCoverageSummary }) {
   if (coverage.withResponses > 0) {
     parts.push(`${coverage.withResponses} with response shape${coverage.withResponses === 1 ? "" : "s"}`);
   }
+  if (coverage.withInputs > 0) {
+    parts.push(`${coverage.withInputs} with query/header input${coverage.withInputs === 1 ? "" : "s"}`);
+  }
   if (coverage.untypedParams > 0) {
     parts.push(`${coverage.untypedParams} with untyped param${coverage.untypedParams === 1 ? "" : "s"}`);
   }

@@ -624,3 +624,164 @@ export async function GET() {
     expect(route.responses?.[0].fields[0]).toEqual({ name: "cursor", type: "null | string", typeResolved: true });
   });
 });
+
+describe("query & header input extraction (M4)", () => {
+  it("extracts req.nextUrl.searchParams.get names (Next.js pattern)", () => {
+    const src = `export async function GET(req: Request) {
+  const q = req.nextUrl.searchParams.get("query");
+  const limit = req.nextUrl.searchParams.get("limit");
+  return Response.json({ q });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.inputs).toEqual([
+      { kind: "query", name: "query", nameResolved: true, typed: false, schemaName: null, type: "", typeResolved: false, multi: false },
+      { kind: "query", name: "limit", nameResolved: true, typed: false, schemaName: null, type: "", typeResolved: false, multi: false },
+    ]);
+  });
+
+  it("extracts header reads via req.headers.get", () => {
+    const src = `export async function GET(req: Request) {
+  const auth = req.headers.get("authorization");
+  return Response.json({ ok: Boolean(auth) });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.inputs).toEqual([
+      { kind: "header", name: "authorization", nameResolved: true, typed: false, schemaName: null, type: "", typeResolved: false, multi: false },
+    ]);
+  });
+
+  it("marks getAll reads as repeated", () => {
+    const src = `export async function GET(req: Request) {
+  const tags = req.nextUrl.searchParams.getAll("tags");
+  return Response.json({ tags });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.inputs?.[0].multi).toBe(true);
+    expect(route.inputs?.[0].name).toBe("tags");
+  });
+
+  it("extracts new URL(req.url).searchParams.get (web standard pattern)", () => {
+    const src = `export async function GET(req: Request) {
+  const page = new URL(req.url).searchParams.get("page");
+  return Response.json({ page });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.inputs?.map((i) => i.name)).toEqual(["page"]);
+  });
+
+  it("resolves aliased searchParams bindings one hop", () => {
+    const src = `export async function GET(req: Request) {
+  const sp = req.nextUrl.searchParams;
+  const q = sp.get("query");
+  return Response.json({ q });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.inputs?.map((i) => i.name)).toEqual(["query"]);
+  });
+
+  it("does not match searchParams reads on objects unrelated to the request", () => {
+    const src = `export async function GET(req: Request) {
+  const other = new URL("https://x.dev?a=1").searchParams.get("a");
+  return Response.json({ other });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.inputs).toBeUndefined();
+  });
+
+  it("reports dynamic names with nameResolved=false — never guessed", () => {
+    const src = `export async function GET(req: Request) {
+  const key = req.nextUrl.searchParams.get(dynamicKey);
+  return Response.json({});
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.inputs?.[0]).toMatchObject({ nameResolved: false, typed: false, typeResolved: false });
+  });
+
+  it("deduplicates repeated reads of the same input", () => {
+    const src = `export async function GET(req: Request) {
+  const a = req.nextUrl.searchParams.get("query");
+  const b = req.nextUrl.searchParams.get("query");
+  return Response.json({ a, b });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.inputs).toHaveLength(1);
+  });
+
+  it("enriches types from a same-file zod query schema", () => {
+    const src = `import { z } from "zod";
+const querySchema = z.object({ page: z.coerce.number().int(), tag: z.string().optional() });
+export async function GET(req: Request) {
+  const page = req.nextUrl.searchParams.get("page");
+  const tag = req.nextUrl.searchParams.get("tag");
+  return Response.json({ page });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.inputs?.[0]).toEqual({
+      kind: "query",
+      name: "page",
+      nameResolved: true,
+      typed: true,
+      schemaName: "querySchema",
+      type: "number",
+      typeResolved: true,
+      multi: false,
+    });
+    // tag is optional in the schema; the zodFieldType union of optional fields
+    // still resolves the base type.
+    expect(route.inputs?.[1]).toMatchObject({ name: "tag", typed: true, typeResolved: true });
+  });
+
+  it("enriches types from an imported zod schema through the M2 index", () => {
+    const schemaFile = {
+      path: "src/lib/query.ts",
+      content: `import { z } from "zod";
+export const listQuery = z.object({ cursor: z.string(), limit: z.number() });`,
+    };
+    const src = `import { listQuery } from "@/lib/query";
+export async function GET(req: Request) {
+  const cursor = req.nextUrl.searchParams.get("cursor");
+  const q = req.nextUrl.searchParams.get("unknown");
+  return Response.json({ cursor });
+}`;
+    const { routes } = parseRouteFileWithDiagnostics("app/api/x/route.ts", src, [schemaFile]);
+    expect(routes[0].inputs?.[0]).toMatchObject({ name: "cursor", typed: true, schemaName: "listQuery", type: "string", typeResolved: true });
+    // Not in any schema: name proven, type honestly unresolved.
+    expect(routes[0].inputs?.[1]).toMatchObject({ name: "unknown", typed: false, typeResolved: false });
+  });
+
+  it("enriches header names from a zod headers schema", () => {
+    const src = `import { z } from "zod";
+const headerSchema = z.object({ "x-request-id": z.string().uuid() });
+export async function GET(req: Request) {
+  const id = req.headers.get("x-request-id");
+  return Response.json({ id });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.inputs?.[0]).toMatchObject({
+      kind: "header",
+      name: "x-request-id",
+      typed: true,
+      schemaName: "headerSchema",
+      type: "string",
+      typeResolved: true,
+    });
+  });
+
+  it("claims nothing when the handler never reads query/header inputs", () => {
+    const src = `export async function POST(req: Request) {
+  const body = await req.json();
+  return Response.json({ body });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.inputs).toBeUndefined();
+  });
+
+  it("wrapped handlers get input extraction through the resolved callback", () => {
+    const src = `export const GET = withAuth(async (req) => {
+  const q = req.nextUrl.searchParams.get("query");
+  return Response.json({ q });
+});`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.inputs?.map((i) => i.name)).toEqual(["query"]);
+  });
+});
