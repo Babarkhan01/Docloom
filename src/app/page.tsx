@@ -14,23 +14,46 @@ const STEPS = [
   {
     n: "02",
     title: "We parse, then we write",
-    body: "An AST parser extracts the structural facts — routes, signatures, param and return types — and AI writes descriptions on top. Facts come from code, not from the model.",
+    body: "A TypeScript AST parser extracts the structural facts — endpoints, request bodies and their fields, response shapes, query parameters, headers — and AI writes descriptions on top. Facts come from your code, never from the model.",
   },
   {
     n: "03",
     title: "Docs, hosted",
-    body: "Structured markdown, published to a clean docs site on your own subdomain. Regenerate anytime and preview the diff before it goes live.",
+    body: "Structured markdown, published to a clean docs site on your own subdomain. Regenerate on merge and preview the diff before it goes live.",
+  },
+];
+
+const FACTS = [
+  {
+    title: "Request bodies",
+    body: "Zod schemas are resolved to plain fields — types, constraints, defaults, optionality — even when the schema lives in another file.",
+  },
+  {
+    title: "Response shapes",
+    body: "What each endpoint returns: JSON payloads, field types, and the HTTP status as written in your code, per branch.",
+  },
+  {
+    title: "Query & header inputs",
+    body: "searchParams and header reads with names as written — typed when a schema in your repo describes them.",
+  },
+  {
+    title: "Honest gaps",
+    body: "Anything the parser cannot prove renders as “not documented in source” — never invented, never a guess dressed up as a fact.",
   },
 ];
 
 const FAQ = [
   {
     q: "Will it hallucinate my API?",
-    a: "Structural facts (endpoints, function signatures, types) come from deterministic AST parsing of your code — the AI only writes natural-language descriptions on top of that structure. Treat the prose as a strong first draft worth reviewing, not an infallible oracle.",
+    a: "Structural facts (endpoints, request-body fields, response shapes, query parameters) come from deterministic AST parsing of your code — the AI only writes natural-language descriptions on top of that structure. And when the parser can't prove something from source, the docs say “not documented in source” instead of inventing it. Treat the prose as a strong first draft worth reviewing, not an infallible oracle.",
   },
   {
     q: "Do you store my source code?",
     a: "No. We fetch your repo, process it in memory to generate docs, and discard the raw code. We never retain source beyond the active processing session.",
+  },
+  {
+    q: "What frameworks does it support?",
+    a: "Next.js App Router route handlers (route.ts / route.tsx). If a repository uses Express, Fastify, or NestJS instead, the docs say so explicitly rather than showing an empty result.",
   },
 ];
 
@@ -64,9 +87,10 @@ export default async function Home() {
             <span className="text-zinc-500">your code.</span>
           </h1>
           <p className="mt-6 max-w-xl text-lg leading-relaxed text-zinc-400">
-            Point Docloom at your GitHub repo and get accurate, structured
-            markdown docs for your API — hosted on a clean docs site, regenerated
-            whenever your code changes.
+            Point Docloom at your GitHub repo and get API docs built from your
+            actual code — endpoints, request bodies, response shapes, query
+            parameters — hosted on a clean docs site, regenerated whenever your
+            code changes.
           </p>
           <div className="mt-10 flex flex-col gap-3 sm:flex-row sm:items-center">
             <TrackedCtaLink
@@ -106,6 +130,32 @@ export default async function Home() {
                 </h3>
                 <p className="mt-2 text-sm leading-relaxed text-zinc-400">
                   {step.body}
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* What ends up in your docs */}
+        <section className="py-16 sm:py-20">
+          <h2 className="text-2xl font-semibold tracking-tight">
+            What ends up in your docs
+          </h2>
+          <p className="mt-3 max-w-xl text-sm leading-relaxed text-zinc-400">
+            Every fact below is extracted from your source by a compiler —
+            before any AI touches the page.
+          </p>
+          <div className="mt-8 grid gap-4 sm:grid-cols-2">
+            {FACTS.map((fact) => (
+              <div
+                key={fact.title}
+                className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-5"
+              >
+                <h3 className="text-base font-medium text-zinc-100">
+                  {fact.title}
+                </h3>
+                <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+                  {fact.body}
                 </p>
               </div>
             ))}
