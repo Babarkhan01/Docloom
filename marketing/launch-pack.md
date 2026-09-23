@@ -13,10 +13,11 @@ your hand before posting. Numbers cited are real, from `demo/README.md`.
 (58 chars. Alternative: "Docs that track your code" — brand line, 25 chars.)
 
 **Description (≤260 chars):**
-> Docloom reads your GitHub repo with a TypeScript AST parser, then writes
-> API docs on top: endpoints, request-body fields with constraints, response
-> shapes with status codes, query params. When the parser can't prove
-> something, it says "not documented in source" — it never invents.
+> Docloom reads your GitHub repo with a TypeScript AST parser, then AI
+> writes descriptions on top of the verified structure: endpoints,
+> request-body fields with constraints, response shapes with status codes,
+> query params. What the parser can't prove is labeled "not documented in
+> source" — the structure itself comes from the AST, never from the model.
 
 **Gallery slides (5):**
 1. Hero — "Docs that track your code." + the loom mark + one repo connected.
@@ -30,12 +31,12 @@ your hand before posting. Numbers cited are real, from `demo/README.md`.
 > invented endpoints my code never had. So I built Docloom backwards:
 > a compiler (TypeScript AST) extracts every fact first — routes, zod
 > request-body fields, per-branch response shapes, query params — and only
-> then does AI write descriptions on top. If the parser can't prove a field
-> from source, the docs literally say "not documented in source."
+> then does AI write descriptions on top of that structure. If the parser
+> can't prove a field from source, the docs literally say "not documented
+> in source." (Supported today: Next.js App Router + zod.)
 >
 > It's free for 1 public repo, paid plans add private repos, auto-regen on
-> merge, and remove branding. Launch-week code LAUNCH50: 50% off Starter
-> for 3 months, expires Oct 7.
+> merge, and remove branding.
 >
 > Roast my demo docs (real output, dub + cal.com): [DEMO LINK]
 
@@ -67,13 +68,18 @@ upvote + a *trial*, not just an upvote — signups prove traction.
 > cross-file schemas is bounded so a generation run fits a Workers
 > subrequest limit.
 >
+> Scope today: Next.js App Router + zod (the stack where API docs rot the
+> fastest). Express/Fastify/NestJS repos are detected and named honestly
+> rather than silently producing empty docs.
+>
 > Free tier: 1 public repo. Happy to answer parsing questions.
 
 **Anticipated Q&A:**
 - *"Why not use the TS type checker / ts-morph?"* → The compiler API is
   used for syntax; semantic resolution is deliberately bounded (one import
-  hop) so resolution stays cheap, offline-runnable, and impossible to
-  over-claim. Full typechecker inference is on the roadmap as a second pass.
+  hop) so resolution stays cheap, offline-runnable, and its claims stay
+  provable from source. Full typechecker inference is on the roadmap as a
+  second pass.
 - *"Only Next.js?"* → Yes, App Router `route.ts` today. Express/Fastify/
   NestJS repos are detected and named honestly in the docs instead of
   silently returning nothing.
@@ -90,8 +96,8 @@ upvote + a *trial*, not just an upvote — signups prove traction.
    constraints · per-branch response shapes with status codes · query &
    header params. From your actual source. [screenshot: dub body fields]
 3. The part I'm proudest of: when it can't prove something from source,
-   the docs say "not documented in source." The AI is *forbidden* from
-   inventing structure. [screenshot: honest gap line]
+   the docs say "not documented in source." The structure comes from your
+   AST — never from the model. [screenshot: honest gap line]
 4. Ran it on two real repos: 57 endpoints documented from dub, 42 from
    cal.com — 86 response shapes on cal.com alone. Demo: [DEMO LINK]
 5. Free for 1 public repo, forever. Paid = private repos + auto-regen on
@@ -145,21 +151,21 @@ generated docs on launch day → convert to Starter (private repo) or free
 
 ## 6. Day-by-day checklist
 
-**Wed Sep 24 (today) ✅** — code frozen: M1–M4 + landing page committed;
+**Thu Sep 24 (today) ✅** — code frozen: M1–M4 + landing page committed;
 demo docs + eval numbers generated; this pack written.
-**Thu Sep 25** — deploy to production; run eval against the live demo
+**Fri Sep 25** — deploy to production; run eval against the live demo
 repos again to confirm same numbers; Dodo checkout E2E with a real card;
 docs subdomain uptime check; create PH upcoming page with gallery assets.
-**Fri Sep 26** — finalize PH gallery slides from demo excerpts; build the
+**Sat Sep 26** — finalize PH gallery slides from demo excerpts; build the
 20-target list; schedule X thread; ask 5–10 hunters.
-**Sat Sep 27** — post X thread + dev.to article; start DMs; PH page live
+**Sun Sep 27** — post X thread + dev.to article; start DMs; PH page live
 with "launching [Tue/Wed]".
-**Sun Sep 28** — DM follow-ups; prep HN draft; rest.
-**Mon Sep 29 or Tue Sep 30 (pick one)** — LAUNCH. PH 12:01 AM PT, replies
+**Mon Sep 28** — DM follow-ups; prep HN draft; rest.
+**Tue Sep 29 or Wed Sep 30 (pick one)** — LAUNCH. PH 12:01 AM PT, replies
 all day, dashboard watch (signups, drafts, published, conversions).
-**Wed Oct 1** — Show HN. Answer every parsing question.
-**Oct 2–7** — outreach follow-ups with per-repo generated docs; LAUNCH50
-expires Oct 7; weekly admin-dashboard review.
+**Thu Oct 1** — Show HN. Answer every parsing question.
+**Oct 2–7 (Wed Oct 7)** — outreach follow-ups with per-repo generated
+docs; LAUNCH50 expires Wed Oct 7; weekly admin-dashboard review.
 
 **Success metrics (from /admin):** signups/day · drafts generated · docs
 published · paid conversions · token spend. Leading indicator: published
