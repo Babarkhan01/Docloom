@@ -12,6 +12,9 @@ export function CoverageLine({ coverage }: { coverage: RouteCoverageSummary }) {
   if (coverage.withRequestBody > 0) {
     parts.push(`${coverage.withRequestBody} with request body${coverage.withRequestBody === 1 ? "" : "s"}`);
   }
+  if (coverage.withResponses > 0) {
+    parts.push(`${coverage.withResponses} with response shape${coverage.withResponses === 1 ? "" : "s"}`);
+  }
   if (coverage.untypedParams > 0) {
     parts.push(`${coverage.untypedParams} with untyped param${coverage.untypedParams === 1 ? "" : "s"}`);
   }

@@ -419,3 +419,208 @@ export async function POST(req: Request) {
     expect(scopes?.defaultValue).toBe('["read"]');
   });
 });
+
+describe("response shape extraction (M3)", () => {
+  it("extracts a Response.json object literal with typed fields and status", () => {
+    const src = `export async function GET() {
+  return Response.json({ ok: true, name: "docloom", version: 1, note: null }, { status: 201 });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.responses).toEqual([
+      {
+        source: "literal",
+        fields: [
+          { name: "ok", type: "boolean", typeResolved: true },
+          { name: "name", type: "string", typeResolved: true },
+          { name: "version", type: "number", typeResolved: true },
+          { name: "note", type: "null", typeResolved: true },
+        ],
+        resolved: true,
+        status: 201,
+      },
+    ]);
+  });
+
+  it("status defaults to not-written (no invented 200)", () => {
+    const src = `export async function GET() {
+  return Response.json({ ok: true });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.responses?.[0].status).toBeUndefined();
+    expect(route.responses?.[0].fields.map((f) => f.name)).toEqual(["ok"]);
+  });
+
+  it("extracts Response.json(schema.parse(...)) reusing the zod machinery", () => {
+    const src = `import { z } from "zod";
+const outSchema = z.object({ id: z.string().uuid(), role: z.enum(["admin", "viewer"]) });
+export async function POST(req: Request) {
+  const body = outSchema.parse(await req.json());
+  return Response.json(body, { status: 201 });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.responses).toEqual([
+      {
+        source: "zod",
+        typeName: "outSchema",
+        fields: [
+          { name: "id", type: "string", typeResolved: true },
+          { name: "role", type: "enum: admin | viewer", typeResolved: true },
+        ],
+        resolved: true,
+        status: 201,
+      },
+    ]);
+  });
+
+  it("extracts a same-file const object returned through Response.json", () => {
+    const src = `const payload = { ok: true, items: ["a", "b"] };
+export async function GET() {
+  return Response.json(payload);
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.responses?.[0].typeName).toBe("payload");
+    expect(route.responses?.[0].resolved).toBe(true);
+    expect(route.responses?.[0].fields).toEqual([
+      { name: "ok", type: "boolean", typeResolved: true },
+      { name: "items", type: "string[]", typeResolved: true },
+    ]);
+  });
+
+  it("extracts an imported zod schema returned via Response.json(schema.parse(...))", () => {
+    const schemaFile = {
+      path: "src/lib/out.ts",
+      content: `import { z } from "zod";
+export const outSchema = z.object({ token: z.string() });`,
+    };
+    const src = `import { outSchema } from "@/lib/out";
+export async function POST(req: Request) {
+  const body = outSchema.parse(await req.json());
+  return Response.json(outSchema.parse(body));
+}`;
+    const { routes } = parseRouteFileWithDiagnostics("app/api/x/route.ts", src, [schemaFile]);
+    expect(routes[0].responses?.[0].source).toBe("zod");
+    expect(routes[0].responses?.[0].typeName).toBe("outSchema");
+    expect(routes[0].responses?.[0].resolved).toBe(true);
+    expect(routes[0].responses?.[0].fields.map((f) => f.name)).toEqual(["token"]);
+  });
+
+  it("multiple returns produce multiple shapes; identical shapes deduplicate", () => {
+    const src = `export async function GET() {
+  if (1 > 2) {
+    return Response.json({ ok: false }, { status: 404 });
+  }
+  return Response.json({ ok: false }, { status: 404 });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.responses).toHaveLength(1);
+
+    const src2 = `export async function GET() {
+  if (1 > 2) return Response.json({ error: "nope" }, { status: 404 });
+  return Response.json({ ok: true });
+}`;
+    const route2 = parseRouteFileToRoute("app/api/y/route.ts", src2);
+    expect(route2.responses).toHaveLength(2);
+    expect(route2.responses?.map((s) => s.status)).toEqual([404, undefined]);
+  });
+
+  it("fields unresolved when values are dynamic — never guessed", () => {
+    const src = `export async function GET() {
+  return Response.json({ data: compute(), when: Date.now() });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    // Field names are proven (the object literal is right there); their types are not.
+    expect(route.responses?.[0].fields.map((f) => f.typeResolved)).toEqual([false, false]);
+  });
+
+  it("dynamic branch responses stay unclaimed (no fabricated shapes)", () => {
+    const src = `export async function GET() {
+  const data = await getData();
+  return Response.json(data);
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.responses).toBeUndefined();
+  });
+
+  it("NextResponse.json and follow-up method chains still resolve", () => {
+    const src = `export async function GET() {
+  return NextResponse.json({ ok: true }).headers.append("x", "y");
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.responses?.[0].fields.map((f) => f.name)).toEqual(["ok"]);
+  });
+
+  it("a bare new Response(...) claims nothing (no annotation, no shape)", () => {
+    const src = `export async function GET() {
+  return new Response("plain");
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.responses).toBeUndefined();
+  });
+
+  it("a declared return-type annotation is recorded only when returns prove nothing at all", () => {
+    const src = `type Out = { a: string };
+export async function GET(): Promise<Out> {
+  const data = await getData();
+  return Response.json(data);
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    // The return's payload identifier is unresolvable → no shape from it;
+    // the declared Promise<Out> is the only honest fact available.
+    expect(route.responses).toEqual([{ source: "annotation", fields: [], resolved: false, typeName: "Promise<Out>" }]);
+  });
+
+  it("an explicit return type on the function beats nothing, but never overrides provable returns", () => {
+    const src = `export async function GET(): Promise<Response> {
+  return Response.json({ ok: true });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    // Provable return wins; Promise<Response> adds nothing.
+    expect(route.responses?.[0].source).toBe("literal");
+  });
+
+  it("wrapped handlers get response extraction through the resolved callback", () => {
+    const src = `export const GET = withAuth(async () => {
+  return Response.json({ ok: true }, { status: 200 });
+});`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.responses?.[0].fields.map((f) => f.name)).toEqual(["ok"]);
+  });
+
+  it("a schema-typed field (token: tokenSchema) resolves through the zod machinery", () => {
+    const src = `import { z } from "zod";
+const tokenSchema = z.string().uuid();
+const payload = { token: tokenSchema, ok: true };
+export async function GET() {
+  return Response.json(payload);
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.responses?.[0].fields).toEqual([
+      { name: "token", type: "string", typeResolved: true },
+      { name: "ok", type: "boolean", typeResolved: true },
+    ]);
+  });
+
+  it("mixed array values resolve to a parenthesized union of element types", () => {
+    const src = `export async function GET() {
+  return Response.json({ ids: [1, "two"] });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.responses?.[0].fields[0]).toEqual({ name: "ids", type: "(number | string)[]", typeResolved: true });
+  });
+
+  it("empty array values stay unresolved", () => {
+    const src = `export async function GET() {
+  return Response.json({ items: [] });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.responses?.[0].fields[0]).toEqual({ name: "items", type: "", typeResolved: false });
+  });
+
+  it("a union ternary value resolves to a plain union type", () => {
+    const src = `export async function GET() {
+  return Response.json({ cursor: cond ? "abc" : null });
+}`;
+    const route = parseRouteFileToRoute("app/api/x/route.ts", src);
+    expect(route.responses?.[0].fields[0]).toEqual({ name: "cursor", type: "null | string", typeResolved: true });
+  });
+});

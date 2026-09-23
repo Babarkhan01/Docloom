@@ -65,6 +65,32 @@ export type ParsedRequestBody = {
   resolved: boolean;
 };
 
+/** One field of a JSON response payload seen in source (M3). */
+export type ResponseField = {
+  name: string;
+  /** Plain type derived from the value as written ("string", "null", "string[]", "string | null"). Empty/unresolved when not provable. */
+  type: string;
+  /** False when the field's type could not be determined from source (never guessed). */
+  typeResolved: boolean;
+};
+
+/**
+ * One response shape of a handler (M3): what a `return` provably produces.
+ * A handler can return several (success + error branches); each return that
+ * yields a provable fact contributes one shape, deduplicated, in source order.
+ */
+export type ResponseShape = {
+  /** "literal" = Response.json(object literal) / same-file const; "zod" = Response.json(schema.parse(x)); "annotation" = declared return type text. */
+  source: "literal" | "zod" | "annotation";
+  fields: ResponseField[];
+  /** False when the field list is known to be incomplete or unresolvable — never a partial truth. */
+  resolved: boolean;
+  /** HTTP status as written (numeric literal in source); undefined when not written. */
+  status?: number;
+  /** Schema/const name or declared type text as written, when applicable. */
+  typeName?: string;
+};
+
 export type ParsedRoute = {
   filePath: string;
   /** Raw file contents (internal: enables the pipeline's round-2 import lookup). */
@@ -83,6 +109,8 @@ export type ParsedRoute = {
   wrappedVia?: string;
   /** Validated request body when provably extractable from this file; undefined/absent = nothing claimed. */
   requestBody?: ParsedRequestBody | null;
+  /** Provable response shapes (M3), in source order, deduplicated; absent = nothing claimed beyond `returnsResponse`. */
+  responses?: ResponseShape[];
 };
 
 /** Per-file facts the parser could see but not resolve — never dropped silently. */
@@ -526,15 +554,56 @@ export type ResolutionContext = {
   sf: ts.SourceFile;
   zodNs: Set<string>;
   zodSchemas: Map<string, ts.Expression>;
+  /** Same-file const object literals (M3 response payloads): name -> initializer. */
+  objects: Map<string, ts.ObjectLiteralExpression>;
+  /** Identifiers assigned a `.parse(...)` result (M3): name -> schema expression. */
+  parseResults: Map<string, ts.Expression>;
   /** Static import bindings: local name -> module specifier as written. */
   imports: Map<string, string>;
 };
+
+/** Same-file const object literals (M3 response payload candidates): name -> initializer. */
+function sameFileObjects(sf: ts.SourceFile): Map<string, ts.ObjectLiteralExpression> {
+  const map = new Map<string, ts.ObjectLiteralExpression>();
+  const visit = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && ts.isObjectLiteralExpression(n.initializer)) {
+      map.set(n.name.text, n.initializer);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return map;
+}
+
+/** Identifiers assigned a `.parse(...)` result (M3): name -> schema expression. */
+function parseResultVariables(sf: ts.SourceFile): Map<string, ts.Expression> {
+  const map = new Map<string, ts.Expression>();
+  const visit = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
+      const init = unwrapExpression(n.initializer);
+      if (ts.isCallExpression(init) && ts.isPropertyAccessExpression(init.expression) && BODY_PARSE_METHODS.has(init.expression.name.text)) {
+        map.set(n.name.text, init.expression.expression);
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return map;
+}
 
 /** Build a resolution context for one file's contents. */
 function contextFor(filePath: string, content: string): ResolutionContext {
   const sf = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true);
   const zodNs = zodNamespaceNames(sf);
-  return { filePath, sf, zodNs, zodSchemas: localZodSchemas(sf, zodNs), imports: importedBindings(sf) };
+  return {
+    filePath,
+    sf,
+    zodNs,
+    zodSchemas: localZodSchemas(sf, zodNs),
+    objects: sameFileObjects(sf),
+    parseResults: parseResultVariables(sf),
+    imports: importedBindings(sf),
+  };
 }
 
 /**
@@ -686,6 +755,35 @@ function resolveSchema(
     // No visited bookkeeping here: entering a file consumes nothing; the visit
     // is recorded only when a definition in it is used (below / in the reccall).
     return resolveSchema(name, target, index, visited, depth + 1);
+  }
+  return null;
+}
+
+/**
+ * Resolve an object-literal const (M3 response payloads) through same-file
+ * declarations and one import hop — mirror of resolveSchema for `objects`.
+ */
+function resolveObject(
+  name: string,
+  ctx: ResolutionContext,
+  index: Map<string, ResolutionContext>,
+  visited: Set<string>,
+  depth: number,
+): { expr: ts.ObjectLiteralExpression; ctx: ResolutionContext } | null {
+  if (depth > 6) return null;
+  const local = ctx.objects.get(name);
+  if (local) {
+    const key = `${ctx.filePath}::${name}`;
+    if (visited.has(key)) return null;
+    visited.add(key);
+    return { expr: local, ctx };
+  }
+  const spec = ctx.imports.get(name);
+  if (!spec) return null;
+  for (const candidate of importSpecifierCandidates(spec, ctx.filePath)) {
+    const target = index.get(candidate);
+    if (!target) continue;
+    return resolveObject(name, target, index, visited, depth + 1);
   }
   return null;
 }
@@ -992,6 +1090,274 @@ function extractRequestBody(
 }
 
 // ---------------------------------------------------------------------------
+// Response shape extraction (M3) — what a `return` provably produces.
+// Response.json(object literal), Response.json(schema.parse(x)) reusing the
+// M1/M2 machinery, same-file const objects, and declared return-type
+// annotations. Everything unresolvable stays unclaimed, never guessed.
+// ---------------------------------------------------------------------------
+
+/** True when the expression is a Response/NextResponse constructor or a call on one. */
+function isResponseCtor(e: ts.Expression): boolean {
+  const u = unwrapExpression(e);
+  if (ts.isIdentifier(u)) return u.text === "Response" || u.text === "NextResponse";
+  if (ts.isPropertyAccessExpression(u) && ts.isIdentifier(u.expression)) {
+    return u.expression.text === "Response" || u.expression.text === "NextResponse";
+  }
+  return false;
+}
+
+/** Status of a Response factory call as written: the first numeric-literal argument. */
+function statusOfArgs(args: readonly ts.Expression[]): number | undefined {
+  for (const a of args) {
+    const u = unwrapExpression(a);
+    if (ts.isNumericLiteral(u)) {
+      const n = Number(u.text);
+      if (Number.isInteger(n) && n >= 100 && n <= 599) return n;
+      return undefined;
+    }
+    // Skip option-bag keys ({ status: 404 }); the direct literal wins.
+    if (ts.isObjectLiteralExpression(u)) {
+      for (const p of u.properties) {
+        if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === "status" && ts.isNumericLiteral(p.initializer)) {
+          const n = Number(p.initializer.text);
+          if (Number.isInteger(n) && n >= 100 && n <= 599) return n;
+          return undefined;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Fields of an object literal, each typed from its value as written. */
+function fieldsFromObjectLiteral(
+  obj: ts.Expression,
+  ctx: ResolutionContext,
+  index: Map<string, ResolutionContext>,
+): { fields: ResponseField[]; complete: boolean } {
+  if (!ts.isObjectLiteralExpression(obj)) return { fields: [], complete: false };
+  const fields: ResponseField[] = [];
+  let complete = true;
+  for (const prop of obj.properties) {
+    if (!ts.isPropertyAssignment(prop)) {
+      complete = false; // spreads, computed keys, methods — list would be incomplete
+      continue;
+    }
+    const name = ts.isIdentifier(prop.name)
+      ? prop.name.text
+      : ts.isStringLiteral(prop.name)
+        ? prop.name.text
+        : ts.isNumericLiteral(prop.name)
+          ? prop.name.text
+          : null;
+    if (!name) {
+      complete = false;
+      continue;
+    }
+    fields.push({ name, ...responseValueType(prop.initializer, ctx, index) });
+  }
+  return { fields, complete };
+}
+
+/**
+ * Plain type for a value as written: string/number/boolean/null literals,
+ * arrays of a uniform literal kind, ternaries over such values, and — via
+ * resolveSchema — zod chains from same-file or imported schemas, so a field
+ * like `token: tokenSchema` reports its zod-derived type. Otherwise unresolved.
+ */
+function responseValueType(
+  init: ts.Expression,
+  ctx: ResolutionContext,
+  index: Map<string, ResolutionContext>,
+): { type: string; typeResolved: boolean } {
+  const u = unwrapExpression(init);
+  if (ts.isStringLiteral(u) || ts.isNoSubstitutionTemplateLiteral(u)) return { type: "string", typeResolved: true };
+  if (ts.isNumericLiteral(u)) return { type: "number", typeResolved: true };
+  if (u.kind === ts.SyntaxKind.TrueKeyword || u.kind === ts.SyntaxKind.FalseKeyword) return { type: "boolean", typeResolved: true };
+  if (u.kind === ts.SyntaxKind.NullKeyword) return { type: "null", typeResolved: true };
+  if (ts.isIdentifier(u)) {
+    // zod schema reference (same-file or one import hop) — reuse M1/M2 resolution.
+    const def = resolveSchema(u.text, ctx, index, new Set(), 0);
+    if (def) {
+      const t = zodFieldType(def.expr, def.ctx, index, 1);
+      return { type: t.type, typeResolved: t.typeResolved };
+    }
+    return { type: "", typeResolved: false };
+  }
+  if (ts.isArrayLiteralExpression(u)) {
+    if (u.elements.length === 0) return { type: "", typeResolved: false }; // [] could be anything
+    const kinds = u.elements.map((el) => responseValueType(el, ctx, index));
+    const allResolved = kinds.every((k) => k.typeResolved);
+    const uniqueTypes = new Set(kinds.map((k) => k.type));
+    if (allResolved && uniqueTypes.size === 1) {
+      return { type: `${[...uniqueTypes][0]}[]`, typeResolved: true };
+    }
+    if (allResolved) {
+      return { type: `(${[...uniqueTypes].sort().join(" | ")})[]`, typeResolved: true };
+    }
+    // Element types unknown: array-ness is proven, element types are not.
+    return { type: "", typeResolved: false };
+  }
+  if (ts.isConditionalExpression(u)) {
+    const whenTrue = responseValueType(u.whenTrue, ctx, index);
+    const whenFalse = responseValueType(u.whenFalse, ctx, index);
+    if (whenTrue.typeResolved && whenFalse.typeResolved) {
+      const union = new Set([whenTrue.type, whenFalse.type]);
+      return { type: union.size === 1 ? whenTrue.type : [...union].sort().join(" | "), typeResolved: true };
+    }
+    return { type: "", typeResolved: false };
+  }
+  if (ts.isPropertyAccessExpression(u) && ts.isIdentifier(u.expression)) {
+    // `const status = { code: 200, text: "ok" }; Response.json({ meta: status.code })`
+    // — walk property chains over same-file const objects, typing the leaf.
+    const def = resolveObject(u.expression.text, ctx, index, new Set(), 0);
+    if (def) {
+      const prop = def.expr.properties.find(
+        (p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === u.name.text,
+      );
+      if (prop) return responseValueType(prop.initializer, def.ctx, index);
+    }
+    return { type: "", typeResolved: false };
+  }
+  return { type: "", typeResolved: false };
+}
+
+/**
+ * Shape from a `.parse(...)`-rooted payload: reuses the M1/M2 zod machinery on
+ * the schema expression, whether it is an inline chain, a named schema, or a
+ * `const body = schema.parse(...)` variable resolved via `parseResults`.
+ */
+function shapeFromParsePayload(
+  parseBase: ts.Expression,
+  ctx: ResolutionContext,
+  index: Map<string, ResolutionContext>,
+  status: number | undefined,
+): ResponseShape {
+  if (ts.isIdentifier(parseBase)) {
+    const def = resolveSchema(parseBase.text, ctx, index, new Set(), 0);
+    if (def) {
+      const built = buildRequestBody(def.expr, parseBase.text, def.ctx, index);
+      return {
+        source: "zod",
+        typeName: parseBase.text,
+        fields: built.fields.map((f) => ({ name: f.name, type: f.type, typeResolved: f.typeResolved && f.type !== "" })),
+        resolved: built.resolved && built.fields.length > 0,
+        ...(status !== undefined ? { status } : {}),
+      };
+    }
+    return { source: "zod", typeName: parseBase.text, fields: [], resolved: false, ...(status !== undefined ? { status } : {}) };
+  }
+  const built = buildRequestBody(parseBase, null, ctx, index);
+  return {
+    source: "zod",
+    fields: built.fields.map((f) => ({ name: f.name, type: f.type, typeResolved: f.typeResolved && f.type !== "" })),
+    resolved: built.resolved && built.fields.length > 0,
+    ...(status !== undefined ? { status } : {}),
+  };
+}
+
+/** The shape one `return` provably produces; null when nothing can be claimed. */
+function shapeOfReturn(
+  ret: ts.ReturnStatement,
+  ctx: ResolutionContext,
+  index: Map<string, ResolutionContext>,
+): ResponseShape | null {
+  const e = ret.expression ? unwrapExpression(ret.expression) : undefined;
+  if (!e || (ts.isIdentifier(e) && e.text === "undefined") || e.kind === ts.SyntaxKind.VoidExpression) return null;
+  // Response factory chains: `Response.json(...)`, `NextResponse.json(...)`,
+  // with follow-ups like `.headers.set(...)` — the factory call stays findable.
+  let cur: ts.Expression = e;
+  let status: number | undefined;
+  for (;;) {
+    if (ts.isCallExpression(cur) && ts.isPropertyAccessExpression(cur.expression)) {
+      if (cur.expression.name.text === "json" && isResponseCtor(cur.expression.expression)) {
+        const call = cur;
+        const payload = call.arguments[0] ? unwrapExpression(call.arguments[0]) : undefined;
+        const st = statusOfArgs(call.arguments.slice(1));
+        if (st !== undefined) status = st;
+        if (!payload) return { source: "literal", fields: [], resolved: false, ...(status !== undefined ? { status } : {}) };
+        // Response.json(schema.parse(...)) / Response.json(body) where
+        // `const body = schema.parse(...)` — both reuse the M1/M2 machinery.
+        let parseBase: ts.Expression | null = null;
+        if (ts.isCallExpression(payload) && ts.isPropertyAccessExpression(payload.expression) && BODY_PARSE_METHODS.has(payload.expression.name.text)) {
+          parseBase = payload.expression.expression;
+        } else if (ts.isIdentifier(payload)) {
+          parseBase = ctx.parseResults.get(payload.text) ?? null;
+        }
+        if (parseBase) return shapeFromParsePayload(parseBase, ctx, index, status);
+        // Response.json(sameFileObject) — a const object literal, same file or
+        // one import hop (reuses the M2 index).
+        if (ts.isIdentifier(payload)) {
+          const def = resolveObject(payload.text, ctx, index, new Set(), 0);
+          if (def) {
+            const { fields, complete } = fieldsFromObjectLiteral(def.expr, def.ctx, index);
+            return { source: "literal", typeName: payload.text, fields, resolved: complete && fields.length > 0, ...(status !== undefined ? { status } : {}) };
+          }
+          // Unknown identifier (dynamic data, function result): nothing is
+          // provable — no shape at all, not even an empty "literal" claim.
+          return null;
+        }
+        const { fields, complete } = fieldsFromObjectLiteral(payload, ctx, index);
+        return { source: "literal", fields, resolved: complete && fields.length > 0, ...(status !== undefined ? { status } : {}) };
+      }
+      // Follow-up calls on the factory result (`.headers.set(...)`): walk down
+      // to the factory call and retry.
+      cur = cur.expression.expression;
+      continue;
+    }
+    // Property access without a call (`.headers`): keep descending.
+    if (ts.isPropertyAccessExpression(cur)) {
+      cur = cur.expression;
+      continue;
+    }
+    break;
+  }
+  // Bare `new Response(...)` / `NextResponse.json(...)` without .json: provable
+  // only via a declared return-type annotation (handled by the caller).
+  return null;
+}
+
+/** Deduplicate shapes: same source + typeName + status + field names = one fact. */
+function sameShape(a: ResponseShape, b: ResponseShape): boolean {
+  if (a.source !== b.source || a.status !== b.status || (a.typeName ?? null) !== (b.typeName ?? null) || a.resolved !== b.resolved) return false;
+  const an = a.fields.map((f) => `${f.name}:${f.type}`).join(",");
+  const bn = b.fields.map((f) => `${f.name}:${f.type}`).join(",");
+  return an === bn;
+}
+
+/**
+ * All provable response shapes of a handler, in source order, deduplicated.
+ * `sf`-level declared return annotations are consulted only when NO return
+ * statement yielded a shape — one honest declared type beats zero facts, but
+ * never overrides what the returns themselves prove.
+ */
+function responsesOf(
+  fn: ts.FunctionLikeDeclaration,
+  ctx: ResolutionContext,
+  index: Map<string, ResolutionContext>,
+): ResponseShape[] {
+  if (!fn.body) return [];
+  const shapes: ResponseShape[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isReturnStatement(n)) {
+      const s = shapeOfReturn(n, ctx, index);
+      if (s && !shapes.some((x) => sameShape(x, s))) shapes.push(s);
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(fn.body);
+
+  if (shapes.length === 0 && fn.type && ts.isTypeLiteralNode(fn.type) || shapes.length === 0 && fn.type) {
+    const text = clean(fn.type.getText(ctx.sf));
+    if (text && text !== "void" && text !== "undefined" && text !== "Promise<void>" && text !== "Promise<undefined>") {
+      shapes.push({ source: "annotation", fields: [], resolved: false, typeName: text });
+    }
+  }
+  return shapes;
+}
+
+// ---------------------------------------------------------------------------
 // File parsing
 // ---------------------------------------------------------------------------
 
@@ -1016,7 +1382,15 @@ export function parseRouteFileWithDiagnostics(
   const zodNs = zodNamespaceNames(sf);
   const zodSchemas = localZodSchemas(sf, zodNs);
   const jsonVars = jsonBodyVariableNames(sf);
-  const ctx: ResolutionContext = { filePath, sf, zodNs, zodSchemas, imports: importedBindings(sf) };
+  const ctx: ResolutionContext = {
+    filePath,
+    sf,
+    zodNs,
+    zodSchemas,
+    objects: sameFileObjects(sf),
+    parseResults: parseResultVariables(sf),
+    imports: importedBindings(sf),
+  };
   const index = repoFiles ? resolutionIndex(repoFiles) : new Map<string, ResolutionContext>();
 
   for (const st of sf.statements) {
@@ -1036,6 +1410,7 @@ export function parseRouteFileWithDiagnostics(
     const direct = handlerFromNode(st);
     if (direct) {
       const body = extractRequestBody(direct.fn, ctx, index, jsonVars);
+      const responses = responsesOf(direct.fn, ctx, index);
       routes.push({
         filePath,
         sourceContent: content,
@@ -1047,6 +1422,7 @@ export function parseRouteFileWithDiagnostics(
         returnsResponse: returnsResponse(direct.fn),
         jsdoc: leadingJSDoc(direct.fn, sf),
         ...(body ? { requestBody: body } : {}),
+        ...(responses.length > 0 ? { responses } : {}),
         exportedSymbols,
       });
       continue;
@@ -1061,6 +1437,7 @@ export function parseRouteFileWithDiagnostics(
           const fn = resolveWrappedHandler(d.initializer, locals);
           if (fn) {
             const body = extractRequestBody(fn, ctx, index, jsonVars);
+            const responses = responsesOf(fn, ctx, index);
             routes.push({
               filePath,
               sourceContent: content,
@@ -1072,6 +1449,7 @@ export function parseRouteFileWithDiagnostics(
               returnsResponse: returnsResponse(fn),
               jsdoc: leadingJSDoc(fn, sf),
               ...(body ? { requestBody: body } : {}),
+              ...(responses.length > 0 ? { responses } : {}),
               exportedSymbols,
               wrapped: true,
               wrappedVia: clean(d.initializer.expression.getText(sf)),

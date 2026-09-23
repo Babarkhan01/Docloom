@@ -234,6 +234,18 @@ function reportForRoot(root) {
     console.log(`  ${(r.method ?? "?").padEnd(6)} ${r.routePath} <- ${r.requestBody.schemaName ?? "inline"}: ${fields}`);
   }
 
+  const withResponses = routes.filter((r) => (r.responses?.length ?? 0) > 0);
+  const responsesResolved = withResponses.filter((r) => r.responses.some((s) => s.resolved));
+  console.log(
+    `Response shapes (M3): ${withResponses.length} routes with provable shapes | ${responsesResolved.length} with ≥1 fully resolved shape | ${withResponses.reduce((n, r) => n + r.responses.length, 0)} shapes total`,
+  );
+  for (const r of withResponses.slice(0, 8)) {
+    const summary = r.responses
+      .map((s) => `${s.status ?? "?"}:${s.resolved ? s.fields.map((f) => f.name).join("/") : "(unresolved)"}`)
+      .join(", ");
+    console.log(`  ${(r.method ?? "?").padEnd(6)} ${r.routePath} -> ${summary}`);
+  }
+
   console.log(
     `\nSkipped: too-large ${tooLarge.length} | unreadable ${unreadable.length} | over-cap ${overCap.length}`,
   );

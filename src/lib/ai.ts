@@ -42,6 +42,13 @@ export async function describeRoutes(routes: ParsedRoute[]): Promise<DescribeRes
           fields: r.requestBody.resolved ? r.requestBody.fields.map((f) => f.name) : null,
         }
       : undefined,
+    // Response facts the same way: statuses + field names only.
+    responses: r.responses?.length
+      ? r.responses.map((s) => ({
+          status: s.status ?? null,
+          fields: s.resolved ? s.fields.map((f) => f.name) : null,
+        }))
+      : undefined,
     jsdoc: r.jsdoc,
   }));
 
