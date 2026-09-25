@@ -152,7 +152,13 @@ generated docs on launch day → convert to Starter (private repo) or free
 ## 6. Day-by-day checklist
 
 **Thu Sep 24 (today) ✅** — code frozen: M1–M4 + landing page committed;
-demo docs + eval numbers generated; this pack written.
+demo docs + eval numbers generated; this pack written. **Readiness gaps
+closed:** self-serve account deletion (Privacy Policy §9 promise), ops
+alerting (`DOCLOOM_ALERT_WEBHOOK_URL` → Slack-compatible webhook), `GET
+/api/health` for uptime monitoring. Pre-deploy checks green: 137 tests,
+lint clean, production build passes, demo docs re-verified byte-for-byte
+(dub + cal.com). Still manual before Tuesday: set the alert webhook +
+uptime monitor on the deployed env, DNS for the real domain.
 **Fri Sep 25** — deploy to production; run eval against the live demo
 repos again to confirm same numbers; Dodo checkout E2E with a real card;
 docs subdomain uptime check; create PH upcoming page with gallery assets.
