@@ -1,4 +1,4 @@
-# dubsteys/dub — API Reference
+# steven-tey/dub — API Reference
 
 Structural facts below were extracted from the source at branch `main` with a TypeScript AST parser; descriptions are AI-written from those facts only.
 
