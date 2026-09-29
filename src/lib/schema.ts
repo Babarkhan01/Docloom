@@ -43,7 +43,8 @@ export const users = pgTable(
     name: text("name"),
     email: text("email"),
     avatarUrl: text("avatar_url"),
-    plan: text("plan").notNull().default("free"), // free / starter / team
+    plan: text("plan").notNull().default("free"), // free / pro / team
+    grandfatheredPriceCents: bigint("grandfathered_price_cents", { mode: "number" }), // nullable — overrides plan price at renewal for early adopters
     dodoCustomerId: text("dodo_customer_id"), // Dodo Payments customer reference
     // Dodo subscription lifecycle. subscriptionStatus mirrors Dodo's statuses
     // (active / on_hold / cancelled / expired / failed); null = never subscribed.

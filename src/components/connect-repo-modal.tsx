@@ -12,12 +12,12 @@ type AvailableRepo = {
 };
 
 type GateError = {
-  message: string;
-  upgradeTo: "starter" | "team" | null;
+  message: string;  upgradeTo: "pro" | "team" | null;
+  
 };
 
 const PLAN_COPY = {
-  starter: { label: "Starter", price: "$19/mo" },
+  pro: { label: "Pro", price: "$29/mo" },
   team: { label: "Team", price: "$49/mo" },
 } as const;
 
@@ -25,7 +25,7 @@ export function ConnectRepoModal({
   plan,
   connectedCount,
 }: {
-  plan: "free" | "starter" | "team";
+  plan: "free" | "pro" | "team";
   connectedCount: number;
 }) {
   const router = useRouter();
@@ -34,7 +34,7 @@ export function ConnectRepoModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [gate, setGate] = useState<GateError | null>(null);
-  const [upgrading, setUpgrading] = useState<"starter" | "team" | null>(null);
+  const [upgrading, setUpgrading] = useState<"pro" | "team" | null>(null);
   const [connected, setConnected] = useState<Set<string>>(new Set());
   const [connecting, setConnecting] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -66,7 +66,7 @@ export function ConnectRepoModal({
     }
   }, []);
 
-  async function upgrade(planKey: "starter" | "team") {
+  async function upgrade(planKey: "pro" | "team") {
     setUpgrading(planKey);
     setError(null);
     try {
@@ -104,7 +104,7 @@ export function ConnectRepoModal({
       } else if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as {
           message?: string;
-          upgradeTo?: "starter" | "team" | null;
+          upgradeTo?: "pro" | "team" | null;
         };
         if (data.upgradeTo && data.message) {
           setGate({ message: data.message, upgradeTo: data.upgradeTo });
@@ -177,11 +177,11 @@ export function ConnectRepoModal({
                 every merge, and removes Docloom branding from your docs.{" "}
                 <button
                   type="button"
-                  onClick={() => upgrade("starter")}
+                  onClick={() => upgrade("pro")}
                   disabled={upgrading !== null}
                   className="font-medium text-accent hover:underline disabled:opacity-50"
                 >
-                  {upgrading === "starter" ? "Opening checkout…" : "Upgrade to Starter"}
+                  {upgrading === "pro" ? "Opening checkout…" : "Upgrade to Pro"}
                 </button>
               </div>
             ) : null}
@@ -284,7 +284,7 @@ export function ConnectRepoModal({
             {plan !== "free" && typeof connectedCount === "number" ? (
               <p className="mt-3 text-center font-mono text-[11px] text-zinc-600">
                 {connectedCount} repo{connectedCount === 1 ? "" : "s"} connected
-                {plan === "starter" ? " of 5" : " of 20"}
+                {plan === "pro" ? " of 5" : " of 20"}
               </p>
             ) : null}
           </div>

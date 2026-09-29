@@ -3,6 +3,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { generations, repos, users } from "@/lib/schema";
 import { withRouteErrors } from "@/lib/route-wrapper";
+import { dispatchAlert, configuredSinks } from "@/lib/alerts";
 import {
   triagePush,
   verifyGitHubSignature,
@@ -188,6 +189,14 @@ async function githubWebhookHandler(request: Request): Promise<NextResponse> {
         const outcome = await runQueuedGeneration(id);
         if (!outcome.ok && !("skipped" in outcome && outcome.skipped)) {
           console.error(`[github-webhook] queued run ${id} failed:`, outcome.message);
+          await dispatchAlert(
+            {
+              title: `Auto-regenerate run failed (${id.slice(0, 8)})`,
+              body: outcome.message,
+              severity: "error",
+            },
+            configuredSinks(),
+          ).catch(() => {});
         }
       }
     });

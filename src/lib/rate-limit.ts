@@ -34,8 +34,22 @@ export function rateLimit(
   return { ok: true, remaining: max - bucket.count, retryAfterSeconds: 0 };
 }
 
-/** Best-effort IP for rate limiting (works behind Cloudflare/proxies). */
+/**
+ * Best-effort client IP for rate limiting.
+ *
+ * CF-Connecting-IP wins: Docloom runs behind Cloudflare, where the edge sets
+ * it on every request and strips any client-supplied value — it cannot be
+ * spoofed through the proxy. X-Forwarded-For's first entry, by contrast, is
+ * whatever the caller sent (Cloudflare only appends the real IP), so an
+ * attacker rotating a fake XFF header would get a fresh rate bucket per
+ * request and defeat every per-IP cap. XFF remains the fallback for
+ * non-Cloudflare environments (local dev, other proxies). With neither header
+ * present every client shares the conservative "unknown" bucket rather than
+ * bypassing the limits entirely.
+ */
 export function clientIp(request: Request): string {
+  const cf = request.headers.get("cf-connecting-ip")?.trim();
+  if (cf) return cf;
   const fwd = request.headers.get("x-forwarded-for");
   return fwd?.split(",")[0]?.trim() || "unknown";
 }

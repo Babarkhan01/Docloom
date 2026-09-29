@@ -16,7 +16,7 @@ export function AutoRegenToggle({
 }: {
   repoId: string;
   initial: boolean;
-  plan: "free" | "starter" | "team";
+  plan: "free" | "pro" | "team";
 }) {
   const router = useRouter();
   const [on, setOn] = useState(initial);

@@ -44,7 +44,7 @@ async function settingsHandler(
     return NextResponse.json(
       {
         error: "upgrade_required",
-        upgradeTo: "starter",
+        upgradeTo: "pro",
         message:
           "Auto-regenerate on every merge is a Starter feature. Upgrade to Starter ($19/mo) to keep your docs fresh automatically — each merge produces a draft for your approval, and nothing is ever published without you.",
       },

@@ -21,9 +21,9 @@ for (const line of fs.readFileSync(".env.local", "utf8").split("\n")) {
 const sql = neon(process.env.DATABASE_URL);
 const BASE = "http://localhost:3000";
 
-const [user] = await sql`select id, login, session_version, email from users order by created_at asc limit 1`;
+const [user] = await sql`select id, login, session_version, email, plan, dodo_subscription_id, dodo_subscription_status, dodo_grace_until, grandfathered_price_cents from users order by created_at asc limit 1`;
 if (!user) { console.error("no user in DB"); process.exit(1); }
-console.log(`user: ${user.login} (session_version=${user.session_version})`);
+console.log(`user: ${user.login} (plan=${user.plan})`);
 
 const token = await new SignJWT({ login: user.login, v: user.session_version })
   .setProtectedHeader({ alg: "HS256" })
@@ -37,7 +37,7 @@ const cookie = `docloom_session=${token}`;
 const cRes = await fetch(`${BASE}/api/billing/checkout`, {
   method: "POST",
   headers: { "content-type": "application/json", cookie },
-  body: JSON.stringify({ plan: "starter" }),
+  body: JSON.stringify({ plan: "pro" }),
 });
 const cBody = await cRes.json().catch(() => ({}));
 console.log(`checkout: ${cRes.status} ${JSON.stringify(cBody).slice(0, 220)}`);
@@ -59,7 +59,7 @@ const payload = JSON.stringify({
     status: "active",
     customer_id: "cus_smoke_123",
     email: user.email,
-    product_id: process.env.DODO_STARTER_PRODUCT_ID,
+    product_id: process.env.DODO_PRO_PRODUCT_ID,
   },
 });
 // Unsigned dev events get a synthetic id; use the header to control idempotency testing.
@@ -87,7 +87,7 @@ console.log(`unsigned no-marker: ${rejRes.status} ${JSON.stringify(await rejRes.
 // --- 5. billing.ts effectivePlan checks (import compiled logic inline) ---
 const GRACE = 7 * 24 * 60 * 60 * 1000;
 function effectivePlan(u) {
-  const plan = u.plan === "starter" || u.plan === "team" ? u.plan : "free";
+  const plan = u.plan === "pro" || u.plan === "team" ? u.plan : "free";
   if (plan === "free") return "free";
   const status = u.dodoSubscriptionStatus;
   if (status === "active") return plan;
@@ -95,11 +95,11 @@ function effectivePlan(u) {
   return "free";
 }
 const cases = [
-  [{ plan: "starter", dodoSubscriptionStatus: "active", dodoGraceUntil: null }, "starter"],
+  [{ plan: "pro", dodoSubscriptionStatus: "active", dodoGraceUntil: null }, "pro"],
   [{ plan: "team", dodoSubscriptionStatus: null, dodoGraceUntil: null }, "free"],
-  [{ plan: "starter", dodoSubscriptionStatus: "on_hold", dodoGraceUntil: new Date(Date.now() + GRACE) }, "starter"],
-  [{ plan: "starter", dodoSubscriptionStatus: "on_hold", dodoGraceUntil: new Date(Date.now() - 1000) }, "free"],
-  [{ plan: "starter", dodoSubscriptionStatus: "cancelled", dodoGraceUntil: null }, "free"],
+  [{ plan: "pro", dodoSubscriptionStatus: "on_hold", dodoGraceUntil: new Date(Date.now() + GRACE) }, "pro"],
+  [{ plan: "pro", dodoSubscriptionStatus: "on_hold", dodoGraceUntil: new Date(Date.now() - 1000) }, "free"],
+  [{ plan: "pro", dodoSubscriptionStatus: "cancelled", dodoGraceUntil: null }, "free"],
 ];
 let pass = 0;
 for (const [u, want] of cases) {
@@ -113,5 +113,5 @@ for (const [u, want] of cases) {
 const [after] = await sql`select plan, dodo_customer_id, dodo_subscription_id, dodo_subscription_status from users where id = ${user.id}`;
 console.log("user after:", after);
 await sql`delete from webhook_events where id like 'smoke-%'`;
-await sql`update users set plan = 'free', dodo_customer_id = null, dodo_subscription_id = null, dodo_subscription_status = null, dodo_grace_until = null where id = ${user.id}`;
+await sql`update users set plan = 'free', dodo_customer_id = null, dodo_subscription_id = null, dodo_subscription_status = null, dodo_grace_until = null, grandfathered_price_cents = null where id = ${user.id}`;
 console.log(`plan logic: ${pass}/${cases.length} PASS — smoke complete`);

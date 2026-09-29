@@ -7,7 +7,7 @@ import { cleanupStaleBuckets, rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
-const PLANS: DodoPlan[] = ["starter", "team"];
+const PLANS: DodoPlan[] = ["pro", "team"];
 
 /**
  * POST /api/billing/checkout { plan } — create a Dodo checkout session for the

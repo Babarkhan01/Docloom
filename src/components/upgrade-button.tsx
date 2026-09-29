@@ -8,10 +8,10 @@ import { useState } from "react";
  */
 export function UpgradeButton() {
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState<"starter" | "team" | null>(null);
+  const [loading, setLoading] = useState<"pro" | "team" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function upgrade(plan: "starter" | "team") {
+  async function upgrade(plan: "pro" | "team") {
     setLoading(plan);
     setError(null);
     try {
@@ -47,13 +47,13 @@ export function UpgradeButton() {
           <p className="mb-2 font-mono text-xs text-zinc-500">choose a plan</p>
           <button
             type="button"
-            onClick={() => upgrade("starter")}
+            onClick={() => upgrade("pro")}
             disabled={loading !== null}
             className="w-full rounded-md border border-zinc-800 px-3 py-2 text-left text-sm transition-colors hover:border-zinc-600 disabled:opacity-50"
           >
-            <span className="font-medium">Starter — $19/mo</span>
+            <span className="font-medium">Pro — $29/mo</span>
             <span className="block text-xs text-zinc-500">
-              5 repos · private repos · auto-regenerate on merge · no branding · 25 gen/day
+              5 repos · private repos · auto + scheduled regen · custom subdomain · no branding · 25 gen/day
             </span>
           </button>
           <button
@@ -62,9 +62,9 @@ export function UpgradeButton() {
             disabled={loading !== null}
             className="mt-2 w-full rounded-md border border-zinc-800 px-3 py-2 text-left text-sm transition-colors hover:border-zinc-600 disabled:opacity-50"
           >
-            <span className="font-medium">Team — $49/mo</span>
+            <span className="font-medium">Team — $89/mo</span>
             <span className="block text-xs text-zinc-500">
-              20 repos · everything in Starter · 100 gen/day
+              20 repos · everything in Pro · 100 gen/day
             </span>
           </button>
           {loading ? <p className="mt-2 font-mono text-xs text-zinc-500">opening checkout…</p> : null}

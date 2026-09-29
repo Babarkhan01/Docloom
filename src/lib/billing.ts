@@ -1,51 +1,125 @@
 /**
- * Plan + billing logic for quotas and entitlements (PRD §pricing: Free 5/day,
- * Starter $19 25/day, Team $49 100/day). Kept dependency-free (no imports) so
- * the effective-plan rules can be unit-tested directly and stay the single
- * authoritative seam.
+ * Plan + billing logic for quotas and entitlements.
+ *
+ * Tier set (instruction): free / pro ($29/mo) / team ($89/mo).
+ * - Free:  1 repo, manual regen only, no custom subdomain, 1 seat, retain last 3 generations.
+ * - Pro:   5 repos, auto-regen on merge + scheduled regen, custom subdomain, 1 seat, full history.
+ * - Team:  20 repos, auto + scheduled regen, custom subdomain, 5 seats then $10/seat, full history.
+ *
+ * Annual billing is 10x the monthly price (pay for 10 months, get 2 free).
+ *
+ * Grandfathering: users.grandfatheredPriceCents, when set, overrides the plan's
+ * listed price at checkout-renewal time (so early adopters keep their price).
  *
  * Entitlement rule: a paid plan is only effective while the Dodo subscription
- * status says so. `on_hold` (renewal payment failed) keeps paid access for a
- * 7-day grace window; cancelled / expired / failed (terminal) drop to free.
+ * status says so. `on_hold` keeps paid access for a 7-day grace window; cancelled /
+ * expired / failed (terminal) drop to free. Never subscribed → free.
  *
- * Tier split (value gating, not just daily quotas):
- * - Free:  1 repo, public only, manual regenerate, "Built with Docloom" branding.
- * - Starter: 5 repos, private repos, auto-regenerate on merge, no branding, 25/day.
- * - Team:  20 repos, everything in Starter, 100/day.
+ * Soft limits (instruction): never hard-block when over a limit. Allow the action,
+ * flag the account as over-limit, surface an upgrade prompt, and pause auto-
+ * regeneration for repos beyond the limit. Hard blocks remain only where they
+ * protect the system (rate limits, auth, private-repo gate on the free plan's
+ * read-only GitHub access — though even that is a soft flag in practice; see
+ * checkConnectEligibility for the public API).
+ *
+ * Keep this module dependency-free (no imports) so the effective-plan rules can be
+ * unit-tested directly and stay the single authoritative seam.
  */
 
-export type Plan = "free" | "starter" | "team";
+export type Plan = "free" | "pro" | "team";
 
 export const GRACE_PERIOD_DAYS = 7;
 
-/** Daily generation caps per plan (spec §4 — limits before any LLM spend). */
-export function dailyGenerationLimitFor(plan: Plan): number {
-  if (plan === "starter") return Number(process.env.DOCLOOM_DAILY_LIMIT_STARTER ?? 25);
-  if (plan === "team") return Number(process.env.DOCLOOM_DAILY_LIMIT_TEAM ?? 100);
-  return Number(process.env.DOCLOOM_DAILY_GENERATION_LIMIT ?? 5);
+// ---------------------------------------------------------------------------
+// Prices — monthly in cents. Annual = 10x monthly.
+// ---------------------------------------------------------------------------
+
+/** Listed monthly price per plan, in cents. Null = not for sale standalone. */
+export const PLAN_PRICES: Record<Plan, number | null> = {
+  free: null,
+  pro: 2900,
+  team: 8900,
+};
+
+/** Annual billing multiplier: pay 10x monthly, get 2 months free. */
+/** Annual billing multiplier: pay 10x monthly, get 2 months free. Tunable via DOCLOOM_ANNUAL_MULT. */
+export function annualMult(): number {
+  const raw = Number(process.env.DOCLOOM_ANNUAL_MULT);
+  return Number.isFinite(raw) && raw >= 2 ? Math.floor(raw) : 10;
 }
 
-/** Max simultaneously connected repos per plan. */
+// ---------------------------------------------------------------------------
+// Plan labels for UI copy (never the wire format — that stays "free"/"pro"/"team").
+// ---------------------------------------------------------------------------
+
+export function planLabel(plan: Plan, annual: boolean = false): string {
+  if (plan === "free") return "Free";
+  const price = PLAN_PRICES[plan];
+  if (price === null) return plan.charAt(0).toUpperCase() + plan.slice(1);
+  const cents = annual ? price * annualMult() : price;
+  const dollars = (cents / 100).toFixed(cents % 100 === 0 ? 0 : 2);
+  const period = annual ? "/yr" : "/mo";
+  return `${plan.charAt(0).toUpperCase() + plan.slice(1)} — $${dollars}${period}`;
+}
+
+// ---------------------------------------------------------------------------
+// Tier limits
+// ---------------------------------------------------------------------------
+
 export function maxReposFor(plan: Plan): number {
-  if (plan === "starter") return Number(process.env.DOCLOOM_MAX_REPOS_STARTER ?? 5);
   if (plan === "team") return Number(process.env.DOCLOOM_MAX_REPOS_TEAM ?? 20);
+  if (plan === "pro") return Number(process.env.DOCLOOM_MAX_REPOS_PRO ?? 5);
   return Number(process.env.DOCLOOM_MAX_REPOS_FREE ?? 1);
 }
 
-/** Private repos are a paid feature (Starter and up). */
 export function allowsPrivateRepos(plan: Plan): boolean {
-  return plan === "starter" || plan === "team";
+  return plan === "pro" || plan === "team";
 }
 
-/** Auto-regenerate on merge is a paid feature (Phase 2 enforcement). */
 export function allowsAutoRegenerate(plan: Plan): boolean {
-  return plan === "starter" || plan === "team";
+  return plan === "pro" || plan === "team";
 }
 
-/** Free-tier published docs carry "Built with Docloom" branding; paid removes it. */
+export function allowsScheduledRegenerate(plan: Plan): boolean {
+  return plan === "pro" || plan === "team";
+}
+
+export function allowsCustomSubdomain(plan: Plan): boolean {
+  return plan === "pro" || plan === "team";
+}
+
+export function maxSeatsFor(plan: Plan): number {
+  return plan === "team" ? 5 : 1;
+}
+
+/** Per-seat price in cents, applied beyond the plan's included seats. */
+export function seatPriceCents(plan: Plan): number {
+  return plan === "team" ? 1000 : 0;
+}
+
+/** Generations to retain in history per plan. Free retains only the last 3. */
+export function historyRetentionFor(plan: Plan): number {
+  return plan === "free" ? 3 : Infinity;
+}
+
+/** Whether published docs on this plan carry the "Generated by Docloom" badge. */
 export function brandingRequired(plan: Plan): boolean {
   return plan === "free";
 }
+
+// ---------------------------------------------------------------------------
+// Daily generation caps — keep the existing env-tunable shape for continuity.
+// ---------------------------------------------------------------------------
+
+export function dailyGenerationLimitFor(plan: Plan): number {
+  if (plan === "team") return Number(process.env.DOCLOOM_DAILY_LIMIT_TEAM ?? 100);
+  if (plan === "pro") return Number(process.env.DOCLOOM_DAILY_LIMIT_PRO ?? 25);
+  return Number(process.env.DOCLOOM_DAILY_GENERATION_LIMIT ?? 5);
+}
+
+// ---------------------------------------------------------------------------
+// Effective plan — subscription state drives entitlements.
+// ---------------------------------------------------------------------------
 
 /** The minimal user fields the plan logic needs (drizzle rows satisfy this). */
 export type BillingUser = {
@@ -56,15 +130,14 @@ export type BillingUser = {
 
 /** Plan whose limits currently apply, given subscription state. */
 export function effectivePlan(user: BillingUser): Plan {
-  const plan = user.plan === "starter" || user.plan === "team" ? user.plan : "free";
+  const plan =
+    user.plan === "pro" || user.plan === "team" ? (user.plan as Plan) : "free";
   if (plan === "free") return "free";
 
-  // Paid plan in the DB is only honored with a live subscription behind it.
   const status = user.dodoSubscriptionStatus;
   if (status === "active") return plan;
 
   if (status === "on_hold") {
-    // Grace window: paid limits continue until dodo_grace_until passes.
     if (user.dodoGraceUntil && user.dodoGraceUntil.getTime() > Date.now()) return plan;
     return "free";
   }
@@ -79,9 +152,76 @@ export function dailyGenerationLimit(user: BillingUser): number {
 }
 
 // ---------------------------------------------------------------------------
-// Connect eligibility — the single pure gate for adding a repo. Server routes
-// call this after counting the user's connected repos; the UI mirrors it for
-// preview only (the API is authoritative).
+// Price override — grandfathering at checkout-renewal time.
+// ---------------------------------------------------------------------------
+
+/** When set, this is the price (cents) charged at checkout renewal for the plan. */
+export type PriceOverride = { cents: number | null; plan: Plan };
+
+/**
+ * Price to charge at checkout-renewal time for `plan` on `user`.
+ * grandfatheredPriceCents wins when set; otherwise the listed monthly (or annual)
+ * price. Null = not for sale (free).
+ */
+export function checkoutPrice(user: { grandfatheredPriceCents: number | null }, plan: Plan, annual: boolean = false): PriceOverride {
+  if (PLAN_PRICES[plan] === null) return { cents: null, plan };
+  if (user.grandfatheredPriceCents !== null && user.grandfatheredPriceCents > 0) {
+    return { cents: user.grandfatheredPriceCents, plan };
+  }
+  const monthly = PLAN_PRICES[plan]!;
+  return { cents: annual ? monthly * annualMult() : monthly, plan };
+}
+
+// ---------------------------------------------------------------------------
+// Soft-limit flags
+// ---------------------------------------------------------------------------
+
+/** Shared session/storage key for the "user is over a soft limit" marker. */
+export const OVER_LIMIT_KEY = "docloom_over_limit";
+
+/**
+ * Whether a user is over their repo limit for the effective plan.
+ * Used by routes to flag (not block) and by the UI to show the upgrade prompt.
+ */
+export function isOverRepoLimit(user: BillingUser, connectedCount: number): boolean {
+  return connectedCount > maxReposFor(effectivePlan(user));
+}
+
+/**
+ * Whether a user is over their daily generation cap for the effective plan.
+ * Used to flag (not block) and pause auto-regen.
+ */
+export function isOverDailyGenLimit(user: BillingUser, usedToday: number): boolean {
+  return usedToday >= dailyGenerationLimitFor(effectivePlan(user));
+}
+
+/** Auto-regen is paused for a repo when the user is over their daily cap. */
+export function shouldPauseAutoRegen(user: BillingUser, usedToday: number): boolean {
+  return isOverDailyGenLimit(user, usedToday);
+}
+
+/** Soft-limit envelope returned by routes that want to allow-but-flag. */
+export type SoftLimitFlag = {
+  overRepoLimit: boolean;
+  overDailyGenLimit: boolean;
+  upgradeTo: Plan | null;
+};
+
+export function softLimitFlag(user: BillingUser, connectedCount: number, usedToday: number): SoftLimitFlag {
+  const plan = effectivePlan(user);
+  const overRepos = isOverRepoLimit(user, connectedCount);
+  const overDaily = isOverDailyGenLimit(user, usedToday);
+  // Upgrade target: the next tier that would relieve the over-limit state, or null on team.
+  let upgradeTo: Plan | null = null;
+  if (overRepos || overDaily) {
+    if (plan === "free") upgradeTo = "pro";
+    else if (plan === "pro") upgradeTo = "team";
+  }
+  return { overRepoLimit: overRepos, overDailyGenLimit: overDaily, upgradeTo };
+}
+
+// ---------------------------------------------------------------------------
+// Connect eligibility — public API kept from the existing module.
 // ---------------------------------------------------------------------------
 
 export type ConnectEligibilityInput = {
@@ -99,15 +239,18 @@ export type ConnectEligibility =
       error: string;
       status: number;
       /** Plan that unlocks the gated capability; null when already on the top tier. */
-      upgradeTo: "starter" | "team" | null;
+      upgradeTo: "pro" | "team" | null;
       message: string;
     };
 
 /**
- * Whether the user may connect one more repo. Grandfathering policy: repos
- * connected before the tier split keep working regardless of plan — only NEW
- * connects are gated. That falls out naturally from counting existing repos:
- * a legacy free user over the limit simply can't add more until they're under it.
+ * Whether the user may connect one more repo.
+ *
+ * Softened per instruction: the return here is still a structured gate for the UI,
+ * but routes must not hard-block on it — they allow the connect and flag the
+ * account over-limit when the user is beyond their plan. The gate here is the
+ * information layer; the hard block is reserved for private repos on the free plan
+ * (read-only GitHub access is the reason) and for rate/auth.
  */
 export function checkConnectEligibility(input: ConnectEligibilityInput): ConnectEligibility {
   const { plan, connectedCount, isPrivate } = input;
@@ -124,11 +267,11 @@ export function checkConnectEligibility(input: ConnectEligibilityInput): Connect
         message: `You've connected ${connectedCount} of ${maxRepos} repos on Team — the top tier. Disconnect a repo to add another.`,
       };
     }
-    const upgrade = plan === "free" ? "starter" : "team";
+    const upgrade = plan === "free" ? "pro" : "team";
     const nextMax = maxReposFor(upgrade);
     const extras =
       plan === "free"
-        ? " — including private repos — plus auto-regenerate on merge and no Docloom branding"
+        ? " — including private repos — plus auto-regenerate on merge, scheduled regeneration, a custom docs subdomain, and no Docloom branding"
         : "";
     return {
       ok: false,
@@ -136,7 +279,7 @@ export function checkConnectEligibility(input: ConnectEligibilityInput): Connect
       error: "repo_limit_reached",
       status: 403,
       upgradeTo: upgrade,
-      message: `You've connected ${connectedCount} of ${maxRepos} repos on the Free plan. Upgrade to ${upgrade === "starter" ? "Starter" : "Team"} to connect up to ${nextMax} repos${extras}.`,
+      message: `You've connected ${connectedCount} of ${maxRepos} repos on the Free plan. Upgrade to ${upgrade === "pro" ? "Pro" : "Team"} to connect up to ${nextMax} repos${extras}.`,
     };
   }
 
@@ -146,9 +289,9 @@ export function checkConnectEligibility(input: ConnectEligibilityInput): Connect
       reason: "private_repos",
       error: "private_repos_upgrade",
       status: 403,
-      upgradeTo: "starter",
+      upgradeTo: "pro",
       message:
-        "Private repos are a Starter feature. Upgrade to Starter ($19/mo) to document private repos with read-only access, auto-regenerate docs on every merge, and remove Docloom branding.",
+        "Private repos are a Pro feature. Upgrade to Pro ($29/mo) to document private repos with read-only access, auto-regenerate docs on every merge, scheduled regeneration, a custom docs subdomain, and no Docloom branding.",
     };
   }
 

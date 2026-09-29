@@ -4,6 +4,8 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users, webhookEvents } from "@/lib/schema";
 import { withRouteErrors } from "@/lib/route-wrapper";
+import { dispatchAlert, configuredSinks } from "@/lib/alerts";
+import { runAfterResponse } from "@/lib/wait-until";
 import {
   getCustomerEmail,
   listCustomerSubscriptions,
@@ -105,7 +107,7 @@ async function keepBestSurvivor(
     s.status === "active" ? planForProduct(s.product_id, s.plan_id) : null;
   const best =
     survivors.find((s) => tier(s) === "team") ??
-    survivors.find((s) => tier(s) === "starter") ??
+    survivors.find((s) => tier(s) === "pro") ??
     survivors.find((s) => s.status === "active") ??
     survivors[0];
   const plan = best ? tier(best) : null;
@@ -260,6 +262,17 @@ async function webhookHandler(request: Request): Promise<NextResponse> {
   const rawBody = await request.text();
 
   if (!verifySignature(rawBody, request.headers)) {
+    console.error("[dodo-webhook] delivery rejected: invalid signature");
+    runAfterResponse(async () => {
+      await dispatchAlert(
+        {
+          title: "Dodo webhook rejected: invalid signature",
+          body: "A delivery to /api/webhooks/dodo failed HMAC verification — either the DODO_WEBHOOK_SECRET is misconfigured in the Dodo dashboard, or someone is posting forged events.",
+          severity: "warning",
+        },
+        configuredSinks(),
+      );
+    }).catch(() => {});
     return NextResponse.json({ error: "invalid_signature" }, { status: 401 });
   }
 
@@ -295,7 +308,18 @@ async function webhookHandler(request: Request): Promise<NextResponse> {
     // Processing failed (e.g. DB blip): remove the idempotency row so Dodo's
     // retry (exponential backoff, 8 attempts) can re-apply the event.
     await db.delete(webhookEvents).where(eq(webhookEvents.id, eventId));
+    const message = err instanceof Error ? err.message : String(err);
     console.error(`[dodo-webhook] processing failed for ${eventId}, will accept retry:`, err);
+    runAfterResponse(async () => {
+      await dispatchAlert(
+        {
+          title: `Dodo webhook processing failed (${body.type ?? "unknown"})`,
+          body: `${message}\nevent ${eventId} — Dodo will retry; billing state may lag until it does.`,
+          severity: "error",
+        },
+        configuredSinks(),
+      );
+    }).catch(() => {});
     return NextResponse.json({ error: "processing_failed" }, { status: 500 });
   }
 }

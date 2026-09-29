@@ -161,7 +161,7 @@ export async function loadAdminStats(): Promise<AdminStats> {
     },
     signupsByDay,
     generationsByDay,
-    planBreakdown: (["free", "starter", "team"] as const).map((plan) => ({
+    planBreakdown: (["free", "pro", "team"] as const).map((plan) => ({
       plan,
       count: planCounts.get(plan) ?? 0,
     })),

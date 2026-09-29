@@ -11,6 +11,7 @@ import {
 import { aiEnabled, describeRoutes } from "./ai";
 import { buildApiMarkdown, type GenerationCoverage } from "./docs";
 import { dailyGenerationLimitFor, effectivePlan, type Plan } from "./billing";
+import { dispatchAlert, configuredSinks } from "./alerts";
 
 /**
  * Generation pipeline: fetch (read-only installation token) → AST parse →
@@ -107,7 +108,7 @@ export async function checkQuota(
   userId: string,
 ): Promise<
   | { ok: true; used: number; limit: number }
-  | { ok: false; status: number; error: string; message: string; upgradeTo: "starter" | "team" | null }
+  | { ok: false; status: number; error: string; message: string; upgradeTo: "pro" | "team" | null }
 > {
   const { used, limit, plan } = await quotaStateFor(userId);
   if (used >= limit) {
@@ -122,16 +123,16 @@ export async function checkQuota(
   return { ok: true, used, limit };
 }
 
-function upgradeToForPlan(plan: Plan): "starter" | "team" | null {
-  return plan === "free" ? "starter" : plan === "starter" ? "team" : null;
+function upgradeToForPlan(plan: Plan): "pro" | "team" | null {
+  return plan === "free" ? "pro" : plan === "pro" ? "team" : null;
 }
 
 function quotaMessage(plan: Plan, used: number, limit: number): string {
   if (plan === "team") {
     return `Daily generation limit reached (${used}/${limit} today). Try again tomorrow.`;
   }
-  const next = plan === "free" ? "Starter" : "Team";
-  const nextLimit = dailyGenerationLimitFor(next === "Starter" ? "starter" : "team");
+  const next = plan === "free" ? "Pro" : "Team";
+  const nextLimit = dailyGenerationLimitFor(next === "Pro" ? "pro" : "team");
   return `Daily generation limit reached (${used}/${limit} today). ${next} raises this to ${nextLimit}/day${
     plan === "free"
       ? " and unlocks private repos, 5 repos, and auto-regenerate on merge"
@@ -185,6 +186,11 @@ export type GenerationStore = {
     patch: { lastGeneratedAt?: Date; updatedAt?: Date },
   ): Promise<void>;
   addQuota(userId: string, tokens: number): Promise<void>;
+  /**
+   * Ops notification on pipeline failure (optional so tests can omit it).
+   * Default implementation posts to DOCLOOM_ALERT_WEBHOOK_URL when set.
+   */
+  notifyFailure?(repo: PipelineRepo, generationId: string, message: string): Promise<void>;
 };
 
 const defaultStore: GenerationStore = {
@@ -196,6 +202,16 @@ const defaultStore: GenerationStore = {
   },
   async addQuota(userId, tokens) {
     await bumpQuota(userId, tokens);
+  },
+  async notifyFailure(repo, generationId, message) {
+    await dispatchAlert(
+      {
+        title: `Generation failed: ${repo.githubRepoFullName}`,
+        body: `${message}\nrun ${generationId} · branch ${repo.defaultBranch}`,
+        severity: "error",
+      },
+      configuredSinks(),
+    ).catch(() => {});
   },
 };
 
@@ -347,6 +363,7 @@ export async function executePipeline(
       errorMessage: message.slice(0, 500),
       completedAt: new Date(),
     });
+    await store.notifyFailure?.(repo, generationId, message);
     return { ok: false, status: 502, error: "generation_failed", message };
   }
 }

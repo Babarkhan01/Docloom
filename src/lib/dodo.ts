@@ -17,7 +17,7 @@ loadEnvFileSecrets();
 const TEST_BASE = "https://test.dodopayments.com";
 const LIVE_BASE = "https://live.dodopayments.com";
 
-export type DodoPlan = Extract<Plan, "starter" | "team">;
+export type DodoPlan = Extract<Plan, "pro" | "team">;
 
 function apiBase(): string {
   const mode = process.env.DODO_MODE === "live" ? "live" : "test";
@@ -47,7 +47,7 @@ export async function createCheckoutSession(opts: {
   name: string;
   returnUrl: string;
 }): Promise<CheckoutSession> {
-  const productId = getEnv(opts.plan === "starter" ? "DODO_STARTER_PRODUCT_ID" : "DODO_TEAM_PRODUCT_ID");
+  const productId = getEnv(opts.plan === "pro" ? "DODO_PRO_PRODUCT_ID" : "DODO_TEAM_PRODUCT_ID");
 
   const res = await fetch(`${apiBase()}/checkouts`, {
     method: "POST",
@@ -102,6 +102,30 @@ export function isTerminalStatus(status: string | undefined): boolean {
 }
 
 /**
+ * Cancel a subscription now (PATCH /subscriptions/{id} with status
+ * "cancelled" — Dodo has no dedicated DELETE endpoint; cancellation is an
+ * update). Used by self-serve account deletion so a deleting user isn't left
+ * with a live subscription. Throws on any non-2xx — the caller (delete flow)
+ * treats failure as best-effort and points the user at Dodo's portal.
+ */
+export async function cancelSubscription(subscriptionId: string): Promise<void> {
+  const res = await fetch(`${apiBase()}/subscriptions/${encodeURIComponent(subscriptionId)}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${getEnv("DODO_API_KEY")}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ status: "cancelled" }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.error(`Dodo subscription cancel failed: HTTP ${res.status} ${body.slice(0, 300)}`);
+    throw new Error(`Dodo cancel failed (HTTP ${res.status})`);
+  }
+}
+
+/**
  * Map a Dodo product/plan id to the Docloom plan it purchases. Shared by the
  * webhook handler and the resync endpoint. Falls back to the plan_id since
  * both reference the product/plan configured in the Dodo dashboard. Returns
@@ -110,10 +134,10 @@ export function isTerminalStatus(status: string | undefined): boolean {
 export function planForProduct(
   productId: string | undefined,
   planId: string | undefined,
-): "starter" | "team" | null {
+): "pro" | "team" | null {
   for (const id of [productId, planId]) {
     if (!id) continue;
-    if (id === process.env.DODO_STARTER_PRODUCT_ID) return "starter";
+    if (id === process.env.DODO_PRO_PRODUCT_ID) return "pro";
     if (id === process.env.DODO_TEAM_PRODUCT_ID) return "team";
   }
   return null;

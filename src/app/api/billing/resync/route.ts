@@ -56,7 +56,7 @@ async function resyncHandler(): Promise<NextResponse> {
   // duplicates are a test artifact, and the webhook/re-sync keeps healing).
   const best =
     live.find((s) => activePlan(s) === "team") ??
-    live.find((s) => activePlan(s) === "starter") ??
+    live.find((s) => activePlan(s) === "pro") ??
     live.find((s) => s.status === "active") ??
     null;
 
