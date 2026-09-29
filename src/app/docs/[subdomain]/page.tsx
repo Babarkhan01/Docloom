@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm";
 import { db } from "@/lib/db";
 import { generations, repos, users } from "@/lib/schema";
 import { brandingRequired, effectivePlan } from "@/lib/billing";
+import { DocloomBadge } from "@/components/docloom-badge";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +54,8 @@ async function fetchPublished(subdomain: string) {
   const [row] = await db
     .select({
       repoFullName: repos.githubRepoFullName,
+      owner: repos.owner,
+      name: repos.name,
       branch: repos.defaultBranch,
       markdown: generations.markdown,
       publishedAt: generations.publishedAt,
@@ -113,15 +116,7 @@ export default async function DocsPage({ params }: Props) {
       {showBranding ? (
         <footer className="mt-12 border-t border-zinc-800 pt-6">
           <div className="flex justify-center">
-            <Link
-              href="/"
-              className="inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/60 px-4 py-2 text-xs text-zinc-400 transition-colors hover:border-zinc-600 hover:text-zinc-200"
-            >
-              <Logo markClassName="h-3 w-[14px]" />
-              <span>
-                Built with <span className="font-medium text-zinc-200">Docloom</span>
-              </span>
-            </Link>
+            <DocloomBadge owner={row.owner} repo={row.name} />
           </div>
         </footer>
       ) : null}
