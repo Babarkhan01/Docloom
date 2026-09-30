@@ -2,10 +2,12 @@ import { randomBytes } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { authorizeUrl, oauthRedirectUri } from "@/lib/github";
 import { cleanupStaleBuckets, clientIp, rateLimit } from "@/lib/rate-limit";
+import { safeNextPath } from "@/lib/safe-redirect";
 
 export const dynamic = "force-dynamic";
 
 const OAUTH_STATE_COOKIE = "docloom_oauth_state";
+const POST_LOGIN_NEXT_COOKIE = "docloom_post_login_next";
 const STATE_MAX_AGE_SECONDS = 600;
 
 /**
@@ -36,5 +38,19 @@ export async function GET(request: NextRequest) {
     path: "/",
     maxAge: STATE_MAX_AGE_SECONDS,
   });
+
+  // Post-login destination (P1.6): the playground sends ?next=/dashboard?connect=…
+  // so a prospect who just generated docs lands in the connect flow for that
+  // same repo. Validated to a same-origin path; cleared by the callback.
+  const next = safeNextPath(request.nextUrl.searchParams.get("next"));
+  if (next) {
+    response.cookies.set(POST_LOGIN_NEXT_COOKIE, next, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: STATE_MAX_AGE_SECONDS,
+    });
+  }
   return response;
 }

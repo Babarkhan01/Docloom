@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { GitHubIcon } from "@/components/github-icon";
 import { Logo } from "@/components/logo";
+import { safeNextPath } from "@/lib/safe-redirect";
 
 const ERROR_MESSAGES: Record<string, string> = {
   github: "GitHub didn't complete the sign-in. Please try again.",
@@ -12,10 +13,13 @@ const ERROR_MESSAGES: Record<string, string> = {
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; next?: string }>;
 }) {
-  const { error } = await searchParams;
+  const { error, next } = await searchParams;
   const message = error ? ERROR_MESSAGES[error] ?? ERROR_MESSAGES.server : null;
+  // Preserve a validated destination across the OAuth round trip (P1.6).
+  const nextPath = safeNextPath(next);
+  const authHref = nextPath ? `/api/auth/github?next=${encodeURIComponent(nextPath)}` : "/api/auth/github";
 
   return (
     <main className="flex flex-1 items-center justify-center px-6 py-16">
@@ -39,8 +43,15 @@ export default async function LoginPage({
             </div>
           ) : null}
 
+          {nextPath ? (
+            <p className="mt-4 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 font-mono text-[11px] leading-relaxed text-zinc-400">
+              Sign in and we&apos;ll take you straight to connecting the repo you
+              just generated docs for.
+            </p>
+          ) : null}
+
           <a
-            href="/api/auth/github"
+            href={authHref}
             className="mt-6 flex w-full items-center justify-center gap-2 rounded-md bg-zinc-100 px-4 py-2.5 text-sm font-medium text-zinc-900 transition-colors hover:bg-white"
           >
             <GitHubIcon />

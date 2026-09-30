@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type AvailableRepo = {
@@ -21,50 +21,78 @@ const PLAN_COPY = {
   team: { label: "Team", price: "$49/mo" },
 } as const;
 
+/** Fetch the connectable repos. A plain function (no setState) so both the
+ *  click path and the playground auto-open path can share it. */
+async function fetchAvailableRepos(): Promise<{ repos?: AvailableRepo[]; error?: string }> {
+  try {
+    const res = await fetch("/api/repos/available");
+    if (res.status === 401) {
+      const data = (await res.json().catch(() => ({}))) as { message?: string };
+      return { error: data.message ?? "GitHub access expired — please sign in again." };
+    }
+    if (!res.ok) return { error: "Couldn't load your repositories. Please try again." };
+    const data = (await res.json()) as { repos: AvailableRepo[] };
+    return { repos: data.repos };
+  } catch {
+    return { error: "Couldn't reach the server. Please try again." };
+  }
+}
+
 export function ConnectRepoModal({
   plan,
   connectedCount,
+  initialRepo,
 }: {
   plan: "free" | "pro" | "team";
   connectedCount: number;
+  /** Pre-filter from the playground sign-in flow (P1.6) — opens the modal for that repo. */
+  initialRepo?: string;
 }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  // Arriving from the playground (P1.6) means open + prefiltered from the
+  // first render — no effect needed to set that up.
+  const [open, setOpen] = useState(Boolean(initialRepo));
   const [repos, setRepos] = useState<AvailableRepo[] | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(initialRepo));
   const [error, setError] = useState<string | null>(null);
   const [gate, setGate] = useState<GateError | null>(null);
   const [upgrading, setUpgrading] = useState<"pro" | "team" | null>(null);
   const [connected, setConnected] = useState<Set<string>>(new Set());
   const [connecting, setConnecting] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialRepo ?? "");
 
   const privateAllowed = plan !== "free";
 
-  const openModal = useCallback(async () => {
+  const openModal = useCallback(async (initialQuery = "") => {
     setOpen(true);
     setLoading(true);
     setError(null);
     setGate(null);
     setRepos(null);
-    setQuery("");
-    try {
-      const res = await fetch("/api/repos/available");
-      if (res.status === 401) {
-        const data = (await res.json()) as { message?: string };
-        setError(data.message ?? "GitHub access expired — please sign in again.");
-      } else if (!res.ok) {
-        setError("Couldn't load your repositories. Please try again.");
-      } else {
-        const data = (await res.json()) as { repos: AvailableRepo[] };
-        setRepos(data.repos);
-      }
-    } catch {
-      setError("Couldn't reach the server. Please try again.");
-    } finally {
-      setLoading(false);
-    }
+    setQuery(initialQuery);
+    const result = await fetchAvailableRepos();
+    setRepos(result.repos ?? null);
+    setError(result.error ?? null);
+    setLoading(false);
   }, []);
+
+  // Auto-open path: the modal is already open/loading from initial state; this
+  // only fills in the list. State is set after the await, never synchronously
+  // in the effect body.
+  useEffect(() => {
+    if (!initialRepo) return;
+    let cancelled = false;
+    void (async () => {
+      const result = await fetchAvailableRepos();
+      if (cancelled) return;
+      setRepos(result.repos ?? null);
+      setError(result.error ?? null);
+      setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialRepo]);
 
   async function upgrade(planKey: "pro" | "team") {
     setUpgrading(planKey);
@@ -130,7 +158,7 @@ export function ConnectRepoModal({
     <>
       <button
         type="button"
-        onClick={openModal}
+        onClick={() => void openModal()}
         className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground transition-opacity hover:opacity-90"
       >
         Connect repository

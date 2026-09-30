@@ -15,9 +15,19 @@ import { dailyGenerationLimitFor, effectivePlan, maxReposFor, type Plan } from "
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ connect?: string | string[] }>;
+}) {
   const authorized = await getAuthorizedUser();
   if (!authorized) redirect("/login");
+
+  // P1.6: `?connect=owner/name` arrives from the playground sign-in path —
+  // open the connect modal pre-filtered to that repo.
+  const { connect } = await searchParams;
+  const rawConnect = Array.isArray(connect) ? connect[0] : connect;
+  const connectRepo = rawConnect?.trim().slice(0, 200) || undefined;
 
   const userRepos = await db
     .select()
@@ -87,7 +97,7 @@ export default async function DashboardPage() {
             Connect a repo to generate and host its docs.
           </p>
         </div>
-        <ConnectRepoModal plan={plan} connectedCount={userRepos.length} />
+        <ConnectRepoModal plan={plan} connectedCount={userRepos.length} initialRepo={connectRepo} />
       </div>
 
       {userRepos.length === 0 ? (

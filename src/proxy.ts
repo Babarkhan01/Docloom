@@ -4,6 +4,7 @@ import {
   SESSION_MAX_AGE_SECONDS,
   verifyAndMaybeRefresh,
 } from "@/lib/session-core";
+import { safeNextPath } from "@/lib/safe-redirect";
 
 /**
  * Auth gate. Cheap signature/expiry check only — the authoritative check
@@ -21,7 +22,12 @@ export async function proxy(request: NextRequest) {
     if (!authed) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     response = NextResponse.next();
   } else if (pathname === "/login") {
-    if (authed) return NextResponse.redirect(new URL("/dashboard", request.url));
+    if (authed) {
+      // Honor a validated post-login destination (P1.6) instead of always
+      // dropping the user on /dashboard.
+      const next = safeNextPath(request.nextUrl.searchParams.get("next"));
+      return NextResponse.redirect(new URL(next ?? "/dashboard", request.url));
+    }
     response = NextResponse.next();
   } else {
     // /dashboard/*, /admin/*

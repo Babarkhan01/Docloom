@@ -6,11 +6,13 @@ import { encrypt } from "@/lib/crypto";
 import { exchangeCode, getUser, oauthRedirectUri } from "@/lib/github";
 import { cleanupStaleBuckets, clientIp, rateLimit } from "@/lib/rate-limit";
 import { createSessionToken, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS } from "@/lib/session-core";
+import { safeNextPath } from "@/lib/safe-redirect";
 import { track } from "@/lib/analytics";
 
 export const dynamic = "force-dynamic";
 
 const OAUTH_STATE_COOKIE = "docloom_oauth_state";
+const POST_LOGIN_NEXT_COOKIE = "docloom_post_login_next";
 
 const FAIL = {
   missing_params: "invalid_request",
@@ -46,6 +48,9 @@ export async function GET(request: NextRequest) {
   const cookieStore = await cookies();
   const expectedState = cookieStore.get(OAUTH_STATE_COOKIE)?.value;
   cookieStore.set(OAUTH_STATE_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
+  // Consume the post-login destination once (set by /api/auth/github?next=…).
+  const nextPath = safeNextPath(cookieStore.get(POST_LOGIN_NEXT_COOKIE)?.value);
+  cookieStore.set(POST_LOGIN_NEXT_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
   if (!expectedState || expectedState !== state) {
     return redirectToLogin(request, FAIL.state_mismatch);
   }
@@ -111,7 +116,7 @@ export async function GET(request: NextRequest) {
       v: row.sessionVersion,
     });
 
-    const response = NextResponse.redirect(new URL("/dashboard", request.url));
+    const response = NextResponse.redirect(new URL(nextPath ?? "/dashboard", request.url));
     response.cookies.set(SESSION_COOKIE, sessionToken, {
       httpOnly: true,
       sameSite: "lax",
