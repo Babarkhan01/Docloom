@@ -12,6 +12,9 @@ import { aiEnabled, describeRoutes } from "./ai";
 import { buildApiMarkdown, type GenerationCoverage } from "./docs";
 import { dailyGenerationLimitFor, effectivePlan, type Plan } from "./billing";
 import { dispatchAlert, configuredSinks } from "./alerts";
+import { sendRegenerationNotification } from "./email";
+import { signDiffShareToken } from "./share-link";
+import { appUrl } from "./env";
 
 /**
  * Generation pipeline: fetch (read-only installation token) → AST parse →
@@ -191,6 +194,16 @@ export type GenerationStore = {
    * Default implementation posts to DOCLOOM_ALERT_WEBHOOK_URL when set.
    */
   notifyFailure?(repo: PipelineRepo, generationId: string, message: string): Promise<void>;
+  /**
+   * Owner email when a queued (auto-regenerate) run produces a new draft
+   * (P1.5). Optional so tests and manual runs can omit it. The default
+   * implementation is a no-op unless RESEND_API_KEY is configured.
+   */
+  notifyRegenerated?(
+    repo: PipelineRepo,
+    generationId: string,
+    result: { endpointCount: number },
+  ): Promise<void>;
 };
 
 const defaultStore: GenerationStore = {
@@ -212,6 +225,44 @@ const defaultStore: GenerationStore = {
       },
       configuredSinks(),
     ).catch(() => {});
+  },
+  async notifyRegenerated(repo, generationId, result) {
+    const [owner] = await db
+      .select({ email: users.email })
+      .from(users)
+      .where(eq(users.id, repo.userId))
+      .limit(1);
+    const to = owner?.email;
+    // GitHub may not expose an email — nothing to send to, skip quietly.
+    if (!to) return;
+
+    // A regeneration that did not change what is published does not deserve
+    // an email; compare the draft with the live document first.
+    const [draft] = await db
+      .select({ markdown: generations.markdown })
+      .from(generations)
+      .where(eq(generations.id, generationId))
+      .limit(1);
+    let publishedMarkdown = "";
+    if (repo.publishedGenerationId) {
+      const [published] = await db
+        .select({ markdown: generations.markdown })
+        .from(generations)
+        .where(eq(generations.id, repo.publishedGenerationId))
+        .limit(1);
+      publishedMarkdown = published?.markdown ?? "";
+    }
+    if ((draft?.markdown ?? "") === publishedMarkdown) return;
+
+    const base = appUrl();
+    await sendRegenerationNotification({
+      to,
+      repoFullName: repo.githubRepoFullName,
+      branch: repo.defaultBranch,
+      endpointCount: result.endpointCount,
+      diffUrl: `${base}/share/diff/${signDiffShareToken(generationId)}`,
+      dashboardUrl: `${base}/dashboard/repos/${repo.id}`,
+    });
   },
 };
 
@@ -447,5 +498,15 @@ export async function runQueuedGeneration(
     return { ok: false, status: 429, error: "quota_exhausted", message };
   }
 
-  return executePipeline(repo, generationId, { maxFiles: webhookMaxFiles() }, io, store);
+  const outcome = await executePipeline(repo, generationId, { maxFiles: webhookMaxFiles() }, io, store);
+
+  // P1.5: tell the owner a new draft is ready, with a link to the shareable
+  // diff (P2.8). Best-effort — a mail failure must never fail the run.
+  if (outcome.ok) {
+    await store.notifyRegenerated?.(repo, generationId, { endpointCount: outcome.endpointCount }).catch((err) => {
+      console.error(`[generation] regeneration notification failed for ${repo.githubRepoFullName}:`, err);
+    });
+  }
+
+  return outcome;
 }
