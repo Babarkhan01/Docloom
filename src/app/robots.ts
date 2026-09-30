@@ -9,7 +9,18 @@ export default function robots(): MetadataRoute.Robots {
   return {
     rules: {
       userAgent: "*",
-      allow: ["/", "/terms", "/privacy", "/refunds", "/eula", "/cookies", "/docs/", "/playground"],
+      allow: [
+        "/",
+        "/terms",
+        "/privacy",
+        "/refunds",
+        "/eula",
+        "/cookies",
+        "/docs/",
+        "/playground",
+        "/vs/",
+        "/generate-openapi-from-zod",
+      ],
       disallow: ["/dashboard", "/admin", "/login", "/api/", "/share"],
     },
   };

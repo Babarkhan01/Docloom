@@ -16,6 +16,9 @@ import { appUrl } from "@/lib/env";
 export const dynamic = "force-dynamic";
 
 const LEGAL_ROUTES = ["/privacy", "/terms", "/refunds", "/eula", "/cookies"] as const;
+// Comparison / SEO landing pages (P2.7): factual pages that answer buyer
+// questions and end in the playground CTA.
+const COMPARISON_ROUTES = ["/vs/next-swagger-doc", "/vs/mintlify", "/generate-openapi-from-zod"] as const;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const base = appUrl();
@@ -24,6 +27,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const staticRoutes: MetadataRoute.Sitemap = [
     { url: `${base}/`, lastModified: now, changeFrequency: "weekly", priority: 1 },
     { url: `${base}/playground`, lastModified: now, changeFrequency: "weekly", priority: 0.9 },
+    ...COMPARISON_ROUTES.map((path) => ({
+      url: `${base}${path}`,
+      lastModified: now,
+      changeFrequency: "monthly" as const,
+      priority: 0.7,
+    })),
     ...LEGAL_ROUTES.map((path) => ({
       url: `${base}${path}`,
       lastModified: now,
