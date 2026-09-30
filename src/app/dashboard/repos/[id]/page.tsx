@@ -10,8 +10,10 @@ import { effectivePlan } from "@/lib/billing";
 import { GenerationActions } from "@/components/generation-actions";
 import { AutoRegenToggle } from "@/components/auto-regen-toggle";
 import { DraftDiff } from "@/components/draft-diff";
+import { CopyShareLink } from "@/components/copy-share-link";
 import { CoverageLine } from "@/components/coverage-line";
 import { coverageSummaryFromMarkdown } from "@/lib/docs";
+import { signDiffShareToken } from "@/lib/share-link";
 
 export const dynamic = "force-dynamic";
 
@@ -96,6 +98,17 @@ export default async function RepoDetailPage({ params }: { params: Promise<{ id:
 
   const hasUnpublishedChanges = Boolean(draft && (!published || draft.completedAt! > published.publishedAt!));
 
+  // Signed, unlisted link to the draft-vs-published diff (P2.8). Best-effort:
+  // if the signing secret is missing we simply don't offer the share control.
+  let shareToken: string | null = null;
+  if (draft && hasUnpublishedChanges && published) {
+    try {
+      shareToken = signDiffShareToken(draft.id);
+    } catch {
+      shareToken = null;
+    }
+  }
+
   return (
     <div className="mx-auto w-full max-w-5xl flex-1 px-6 py-10">
       <header className="mb-8 flex items-center justify-between gap-4">
@@ -151,7 +164,10 @@ export default async function RepoDetailPage({ params }: { params: Promise<{ id:
                 This draft differs from the published version — publish to replace it, or discard. Nothing is published
                 until you approve it here, even when a draft was produced automatically.
               </p>
-              <DraftDiff oldMarkdown={published.markdown ?? ""} newMarkdown={draft.markdown ?? ""} />
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <DraftDiff oldMarkdown={published.markdown ?? ""} newMarkdown={draft.markdown ?? ""} />
+                {shareToken ? <CopyShareLink token={shareToken} /> : null}
+              </div>
             </>
           ) : null}
           <CoverageLine coverage={coverageSummaryFromMarkdown(draft.markdown ?? "")} />

@@ -9,8 +9,17 @@ import { diffLines, type Change } from "diff";
  * so the user can see exactly what a regeneration (manual or webhook)
  * changed before approving it.
  */
-export function DraftDiff({ oldMarkdown, newMarkdown }: { oldMarkdown: string; newMarkdown: string }) {
-  const [open, setOpen] = useState(false);
+export function DraftDiff({
+  oldMarkdown,
+  newMarkdown,
+  defaultOpen = false,
+}: {
+  oldMarkdown: string;
+  newMarkdown: string;
+  /** Expanded on first render — the shared diff page opens it by default. */
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
 
   const changes: Change[] = useMemo(() => diffLines(oldMarkdown, newMarkdown), [oldMarkdown, newMarkdown]);
   const stats = useMemo(() => {
