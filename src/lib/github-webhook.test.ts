@@ -64,7 +64,7 @@ const basePush: PushEvent = {
 const baseGates: RepoGateState = {
   connected: true,
   defaultBranch: "main",
-  plan: "starter",
+  plan: "pro",
   autoRegenerate: true,
   lastProcessedCommitSha: null,
   lastWebhookAt: null,
