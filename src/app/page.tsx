@@ -111,6 +111,15 @@ export default async function Home() {
           <p className="mt-4 font-mono text-xs text-zinc-600">
             GitHub sign-in · read-only access · no credit card
           </p>
+          <p className="mt-2 text-sm text-zinc-500">
+            Not ready to sign in?{" "}
+            <Link
+              href="/playground"
+              className="text-zinc-300 underline decoration-zinc-700 underline-offset-4 transition-colors hover:text-zinc-100"
+            >
+              Try it on any public repo — no account
+            </Link>
+          </p>
         </section>
 
         {/* How it works */}
