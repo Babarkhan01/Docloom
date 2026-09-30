@@ -10,6 +10,8 @@ import {
 import { cleanupStaleBuckets, clientIp } from "@/lib/rate-limit";
 import { track } from "@/lib/analytics";
 import { withRouteErrors } from "@/lib/route-wrapper";
+import { dispatchAlert, configuredSinks } from "@/lib/alerts";
+import { runAfterResponse } from "@/lib/wait-until";
 
 export const dynamic = "force-dynamic";
 
@@ -105,6 +107,24 @@ async function handler(request: NextRequest) {
     }
     // Structured failure from the pipeline (not-found, private repo, too
     // large, GitHub rate limit…). 429s get a Retry-After like the caps above.
+
+    // GitHub rate-limiting the anonymous playground is a configuration problem
+    // (PLAYGROUND_GITHUB_TOKEN missing or not attached), not a user error — and
+    // it should reach ops before a prospect following a demo link hits it. Fire
+    // the alert webhook after the response, best-effort.
+    if (result.error === "github_rate_limited") {
+      runAfterResponse(async () => {
+        await dispatchAlert(
+          {
+            title: "Playground: GitHub rate limit hit",
+            body: `repo ${parsed.owner}/${parsed.repo} · ip ${ip} · ${result.message}`,
+            severity: "warning",
+          },
+          configuredSinks(),
+        );
+      }).catch(() => {});
+    }
+
     const headers =
       result.status === 429 ? { "Retry-After": "60" } : undefined;
     return NextResponse.json(
