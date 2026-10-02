@@ -29,7 +29,7 @@ function apiBase(): string {
  * selects the API base (test vs live); both modes are valid once configured.
  */
 export function dodoEnabled(): boolean {
-  return Boolean(process.env.DODO_API_KEY && process.env.DODO_STARTER_PRODUCT_ID && process.env.DODO_TEAM_PRODUCT_ID);
+  return Boolean(process.env.DODO_API_KEY && process.env.DODO_PRO_PRODUCT_ID && process.env.DODO_TEAM_PRODUCT_ID);
 }
 
 export type CheckoutSession = {
