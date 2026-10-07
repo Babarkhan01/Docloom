@@ -1,41 +1,88 @@
-import { getOptionalEnv } from "./env";
-import { routeKey, } from "./docs";
-import type { ParsedRoute } from "./route-parser";
-
 /**
  * AI prose generation over AST-extracted facts. Per the PRD: the model writes
  * natural-language descriptions ONLY — structural facts arrive pre-parsed and
  * are never requested from (or trusted to) the model.
  *
- * Without ANTHROPIC_API_KEY the module runs in stub mode (empty map), letting
- * the pipeline produce fully structural docs for local development.
+ * Providers: groq (free tier, PUBLIC repos only — the gateway's privacy gate
+ * throws LlmPrivacyError otherwise), nebius, anthropic (later). Without
+ * LLM_PROVIDER the module runs in stub mode (empty map), letting the pipeline
+ * produce fully structural docs locally and in the public playground.
  */
-const MODEL = "claude-sonnet-5";
-const ENDPOINT = "https://api.anthropic.com/v1/messages";
-const TIMEOUT_MS = 60_000;
+import { generateText, LlmError, type ProviderId } from "./llm";
+import { routeKey } from "./docs";
+import type { ParsedRoute } from "./route-parser";
 
 export type DescribeResult = {
   descriptions: Map<string, string>;
   tokensUsed: number;
+  /** Provider actually used for this batch (null = stub/no-AI path). */
+  provider: ProviderId | null;
+  /**
+   * Flagged, not dropped: per route key, prose tokens that look like
+   * parameter/field names but are absent from the AST facts for that handler.
+   */
+  flagged: Map<string, string[]>;
 };
 
-export function aiEnabled(): boolean {
-  return Boolean(process.env.ANTHROPIC_API_KEY);
+/** The env-configured default provider, or null when unset/unknown. */
+export function activeProviderName(): ProviderId | null {
+  const name = (process.env.LLM_PROVIDER ?? "").trim().toLowerCase();
+  if (name === "groq" || name === "nebius" || name === "anthropic") return name;
+  return null;
 }
 
-export async function describeRoutes(routes: ParsedRoute[]): Promise<DescribeResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return { descriptions: new Map(), tokensUsed: 0 };
+export function aiEnabled(): boolean {
+  return activeProviderName() !== null;
+}
+
+const SYSTEM_PROMPT =
+  "You are a technical writer documenting HTTP APIs. You receive structural facts " +
+  "extracted from source code by a compiler. Write ONE concise description (max 2 sentences) " +
+  "per endpoint. Describe only what the facts imply — never invent parameters, types, " +
+  "routes, auth behavior, or side effects. When the facts are ambiguous, describe the " +
+  "unambiguous parts only. Respond with strict JSON, no markdown fences: " +
+  '[{"key":"METHOD /path","description":"..."}] with one entry per input fact key.';
+
+/** Parse the model's strict-JSON array into a key→description map (empty on unparseable). */
+function parseDescriptions(text: string): Map<string, string> {
+  const out = new Map<string, string>();
+  try {
+    const start = text.indexOf("[");
+    const end = text.lastIndexOf("]");
+    if (start >= 0 && end > start) {
+      const parsed = JSON.parse(text.slice(start, end + 1)) as { key?: string; description?: string }[];
+      for (const item of parsed) {
+        if (typeof item.key === "string" && typeof item.description === "string" && item.description.trim()) {
+          out.set(item.key, item.description.trim());
+        }
+      }
+    }
+  } catch {
+    // Unparseable output → empty map; docs.ts uses JSDoc/placeholder fallbacks.
+  }
+  return out;
+}
+
+/**
+ * Run one provider call for a batch of parsed routes.
+ *
+ * `repoPublic` is a per-batch fact — every route in a generation comes from
+ * the same repo. The gateway throws LlmPrivacyError when `provider` is groq
+ * and the source is private (unless ALLOW_PRIVATE_ON_GROQ=true).
+ */
+export async function describeRoutes(routes: ParsedRoute[], repoPublic: boolean): Promise<DescribeResult> {
+  const provider = activeProviderName();
+  if (!provider) return { descriptions: new Map(), tokensUsed: 0, provider: null, flagged: new Map() };
 
   const facts = routes.map((r) => ({
     key: routeKey(r),
     file: r.filePath,
     dynamicSegments: r.dynamicSegments,
-    routeContextParams: r.params,
+    routeContextParams: (r.params ?? []).map((p) => ({ name: p.name, provenance: p.kind })),
     readsRequest: r.hasRequestUsage,
     returnsResponse: r.returnsResponse,
-    // Schema name + field names only — prose is grounded on these, never asked
-    // to invent structure.
+    // Schema name + field names only — prose is grounded on these, never
+    // asked to invent structure.
     requestBody: r.requestBody
       ? {
           schema: r.requestBody.schemaName,
@@ -49,7 +96,7 @@ export async function describeRoutes(routes: ParsedRoute[]): Promise<DescribeRes
           fields: s.resolved ? s.fields.map((f) => f.name) : null,
         }))
       : undefined,
-    // Query/header inputs: names + proven types only.
+    // Query/header inputs: proven names (+ types when provable) only.
     inputs: r.inputs?.length
       ? r.inputs.map((i) => ({
           kind: i.kind,
@@ -60,57 +107,91 @@ export async function describeRoutes(routes: ParsedRoute[]): Promise<DescribeRes
     jsdoc: r.jsdoc,
   }));
 
-  const system =
-    "You are a technical writer documenting HTTP APIs. You receive structural facts " +
-    "extracted from source code by a compiler. Write ONE concise description (max 2 sentences) " +
-    "per endpoint. Describe only what the facts imply — never invent parameters, types, " +
-    "routes, auth behavior, or side effects. When the facts are ambiguous, describe the " +
-    "unambiguous parts only. Respond with strict JSON, no markdown fences: " +
-    '[{"key":"METHOD /path","description":"..."}] with one entry per input fact key.';
-
-  const res = await fetch(ENDPOINT, {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: getOptionalEnv("ANTHROPIC_MODEL", MODEL),
-      max_tokens: 4096,
-      system,
-      messages: [{ role: "user", content: JSON.stringify(facts, null, 2) }],
-    }),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Claude API error ${res.status}: ${body.slice(0, 300)}`);
-  }
-
-  const data = (await res.json()) as {
-    content?: { type: string; text?: string }[];
-    usage?: { input_tokens?: number; output_tokens?: number };
-  };
-  const text = (data.content ?? []).find((c) => c.type === "text")?.text ?? "";
-
-  const descriptions = new Map<string, string>();
   try {
-    const start = text.indexOf("[");
-    const end = text.lastIndexOf("]");
-    if (start >= 0 && end > start) {
-      const parsed = JSON.parse(text.slice(start, end + 1)) as { key?: string; description?: string }[];
-      for (const item of parsed) {
-        if (typeof item.key === "string" && typeof item.description === "string" && item.description.trim()) {
-          descriptions.set(item.key, item.description.trim());
-        }
-      }
-    }
-  } catch {
-    // Unparseable output → fall through; docs.ts uses JSDoc/placeholder fallbacks.
-  }
+    const res = await generateText({
+      system: SYSTEM_PROMPT,
+      prompt: JSON.stringify(facts, null, 2),
+      maxTokens: 4096,
+      repoPublic,
+      provider,
+    });
 
-  const tokensUsed = (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0);
-  return { descriptions, tokensUsed };
+    const descriptions = parseDescriptions(res.text);
+    const flagged = flagInventedNames(routes, descriptions);
+    return {
+      descriptions,
+      tokensUsed: (res.tokensIn ?? 0) + (res.tokensOut ?? 0),
+      provider,
+      flagged,
+    };
+  } catch (err) {
+    if (err instanceof LlmError) {
+      // Repack with the provider id so route-wrapper/health can attribute it.
+      throw new LlmError(err.provider, err.message);
+    }
+    throw err;
+  }
 }
+
+// ---------------------------------------------------------------------------
+// Hallucination post-check
+// ---------------------------------------------------------------------------
+
+/**
+ * Per route key: prose tokens that look like field/parameter names but are
+ * absent from the AST facts for that handler. Conservative on purpose —
+ * false positives are acceptable; a silent hallucination is not.
+ *
+ * A token "counts" when it appears Capitalized or snake_cased in the prose
+ * and matches none of: route-context param names, dynamic segments, request
+ * body fields, response fields, query/header input names (case-insensitive).
+ */
+export function flagInventedNames(
+  routes: ParsedRoute[],
+  descriptions: Map<string, string>,
+): Map<string, string[]> {
+  const byKey = new Map<string, ParsedRoute>();
+  for (const r of routes) byKey.set(routeKey(r), r);
+
+  const out = new Map<string, string[]>();
+  for (const [key, description] of descriptions) {
+    const route = byKey.get(key);
+    if (!route) continue; // unknown key: dropped at parse time, nothing to flag against
+
+    const known = new Set<string>();
+    const add = (names: Iterable<string>) => {
+      for (const n of names) if (n) known.add(n.toLowerCase());
+    };
+    add((route.params ?? []).map((p) => p.name));
+    add(route.dynamicSegments);
+    if (route.requestBody?.resolved) add(route.requestBody.fields.map((f) => f.name));
+    if (route.responses) for (const s of route.responses) if (s.resolved) add(s.fields.map((f) => f.name));
+    if (route.inputs) add(route.inputs.filter((i) => i.nameResolved).map((i) => i.name));
+
+    const mentioned = description.match(/[A-Za-z][A-Za-z0-9_]*/g) ?? [];
+    const invented = mentioned.filter((w) => {
+      // Field-name shapes: Capitalized, snake_case, or camelCase — camelCase
+      // is what LLMs most often invent (workspaceId, createdAt).
+      const isFieldish = /^[A-Z]/.test(w) || w.includes("_") || /^[a-z]+[A-Z]/.test(w);
+      if (!isFieldish) return false;
+      if (PROSE_WORDS.has(w.toLowerCase())) return false; // sentence-initial prose, not a field name
+      return !known.has(w.toLowerCase()); // known names match case-insensitively
+    });
+    if (invented.length > 0) out.set(key, [...new Set(invented)]);
+  }
+  return out;
+}
+
+/**
+ * Capitalized words that are prose, not field-name hallucinations. Kept
+ * deliberately small — an unknown Capitalized token stays flagged (safe
+ * direction), this only removes the constant false positives.
+ */
+const PROSE_WORDS = new Set([
+  "the", "this", "that", "these", "those", "a", "an", "when", "if", "and", "or", "not",
+  "returns", "return", "response", "request", "endpoint", "handler", "route", "method",
+  "lists", "creates", "updates", "deletes", "accepts", "handles", "supports", "describes",
+  "optional", "required", "array", "object", "string", "number", "boolean", "enum", "note",
+  "json", "http", "api", "url", "id", "ids", "get", "post", "put", "patch", "delete", "head",
+  "by", "with", "for", "per", "each", "based", "source", "docs", "docloom",
+]);

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { activeProviderName } from "@/lib/ai";
+import { lastLlmFailure } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
 
@@ -36,8 +38,17 @@ async function dbOk(): Promise<boolean> {
 
 export async function GET() {
   const ok = await dbOk();
-  return NextResponse.json(
-    { status: ok ? "ok" : "degraded", db: ok ? "ok" : "error" },
-    { status: ok ? 200 : 503 },
-  );
+  // Provider DIAGNOSTICS only — never status, never keys. The provider's
+  // failure memory does not affect the health verdict: a broken LLM key is
+  // not a dead service (docs still generate structurally). "configured:
+  // none" = the stub/JSDoc-fallback path.
+  const provider = activeProviderName();
+  const llm = lastLlmFailure();
+  const payload: Record<string, unknown> = {
+    status: ok ? "ok" : "degraded",
+    db: ok ? "ok" : "error",
+    llmProvider: provider ?? "configured: none",
+  };
+  if (llm) payload.llmLastFailure = llm;
+  return NextResponse.json(payload, { status: ok ? 200 : 503 });
 }

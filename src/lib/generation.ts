@@ -386,7 +386,9 @@ export async function executePipeline(
     let descriptions = new Map<string, string>();
     let tokensUsed = 0;
     if (routes.length > 0 && io.aiEnabled()) {
-      const result = await io.describeRoutes(routes);
+      // repoPublic gate: the groq provider refuses private source unless
+      // ALLOW_PRIVATE_ON_GROQ=true; other providers accept either.
+      const result = await io.describeRoutes(routes, !repo.isPrivate);
       descriptions = result.descriptions;
       tokensUsed = result.tokensUsed;
     }
