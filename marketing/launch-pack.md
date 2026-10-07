@@ -23,8 +23,8 @@ your hand before posting. Numbers cited are real, from `demo/README.md`.
 1. Hero — "Docs that track your code." + the loom mark + one repo connected.
 2. "Facts first" — a real excerpt from `demo/dub-api.md`: the `domain`/`workspaceSlug` request body with `min(1)` constraints and the 5 response branches.
 3. "Honest gaps" — side-by-side: a guessed docs generator vs. Docloom's "not documented in source" line.
-4. "Regenerate on merge" — the auto-regenerate toggle + diff preview screen (Starter feature).
-5. Pricing — Free (1 public repo) / Starter $19 / Team $49, launch offer badge.
+4. "Regenerate on merge" — the auto-regenerate toggle + diff preview screen (Pro feature).
+5. Pricing — Free / Pro $29 / Team $89 (+10× monthly if billed annually), launch offer badge.
 
 **First comment (maker, post at 12:01 AM PT):**
 > I kept regenerating API docs by hand, and every AI tool I tried happily
@@ -101,7 +101,7 @@ upvote + a *trial*, not just an upvote — signups prove traction.
 4. Ran it on two real repos: 57 endpoints documented from dub, 42 from
    cal.com — 86 response shapes on cal.com alone. Demo: [DEMO LINK]
 5. Free for 1 public repo, forever. Paid = private repos + auto-regen on
-   merge + no badge. LAUNCH50 = 50% off Starter for 3 months (till Oct 7).
+   merge + no badge. LAUNCH50 = 50% off Pro for 3 months.
 6. Launching on Product Hunt [DATE]. If API docs are your week's chore,
    come try it: [LINK]
 
@@ -124,6 +124,22 @@ Structure:
 
 ## 5. Outreach — 20 targets (DM/email, Sep 27–28)
 
+**Full email sequences (A1–A3 / B1–B3, per track):** `marketing/prospect-emails.md`
+
+**People-finding map — where Docloom buyers actually are and how to reach them without
+  spamming:** `marketing/finding-people.md` — active-need search loops (GitHub search for
+  `filename:route.ts`, issues/discussions for "docs"/"missing docs", Reddit/HN/dev.to/
+blog complaint searches) + latent-need discovery channels + the demo-first rule and intent-
+verification checks.
+
+**Directory and launch-platform strategy (caselist cut of mmccaff/PlacesToPostYourStartup
+  + dev-tool angles):** `marketing/mmccaff-strategy.md` — pursue the launch-week channels
+  first, then a short careful submission pass, skip the dump sites that don't surface
+  dev tools.
+
+**Directory / listing plan (keeper channels only):** `marketing/listings.md`
+— use those for email; the one-liner below is the DM/short-form variant.
+
 **Template (personalize the first line):**
 > Hey [name] — I was looking at [repo/product]'s API and noticed the docs
 > are [missing / stale since vN / a single README]. I built a tool that
@@ -140,11 +156,12 @@ Structure:
 
 **Scoring for the list:** 20 targets = 10 with public repos (instant demo
 material — generate their docs before DMing), 10 private-repo teams (the
-paywall pitch: "your API is private; docs are generated in memory, never
-stored; private repos are exactly what Starter is for").
+paywall pitch: "your API is private; Docloom stores metadata and the generated
+docs — never your source code, which is read in memory during a generation run
+and dropped; private repos are exactly what Pro is for").
 
 **Launch-week sequence per target:** DM Sep 27–28 → follow-up with *their*
-generated docs on launch day → convert to Starter (private repo) or free
+generated docs on launch day → convert to Pro (private repo) or free
 (published docs = marketing loop).
 
 ---

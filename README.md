@@ -6,11 +6,12 @@ Docs that track your code. Connect a GitHub repo (public or private) and Docloom
 generates accurate, structured markdown docs for your API — AST-verified
 structure, AI-written descriptions, auto-hosted at a clean docs site.
 
-**Current status — MVP stage 1 (built):** project scaffold, GitHub App OAuth
-login, session management, and the repo-connection screen (connect a repo →
-it appears on your dashboard). Parsing/generation is deliberately **not**
-started yet, per the build order in the PRD: *get one repo connecting and
-listing successfully before touching parsing/generation logic.*
+**Current status:** the full generate-and-host pipeline is live — GitHub App
+OAuth sign-in, repo connection, TypeScript AST parsing of App Router handlers,
+AI-written descriptions over the parsed facts, draft-vs-published diff review,
+and hosted docs pages — plus the no-signup playground, auto-regeneration on
+merge (webhook + cron), and Dodo billing. Plans: **Free / Pro $29 / Team $89**
+(annual = 10× monthly).
 
 ---
 
@@ -179,6 +180,37 @@ Follows the Technical Architecture & Security Spec. Highlights:
   nothing committed (`.env*` is gitignored; only `.env.example` and the
   staging/production templates are committed).
 
+## Ops: alerting, health check, account deletion
+
+- **Alerting** — set `DOCLOOM_ALERT_WEBHOOK_URL` (any Slack-compatible
+  incoming webhook; Discord works by appending `/slack`) and operational
+  failures POST a `{ text }` message there: unhandled route errors, failed
+  generation runs, Dodo webhook failures (bad signature, processing errors),
+  failed account deletions. Fire-and-forget and silent when unset — one env
+  var, no SDK.
+- **Health check** — `GET /api/health` runs a bounded (`3s`) `select 1` and
+  returns `200 {status:"ok"}` or `503 {status:"degraded"}`. Point
+  UptimeRobot/Better Stack at it (plain GET, no auth); robots.txt already
+  disallows `/api` for crawlers.
+- **Account deletion** — self-serve in the dashboard's Danger zone
+  (type-DELETE-to-confirm): best-effort Dodo subscription cancel
+  (`PATCH /subscriptions/{id}`, failures are reported to the user and
+  alerted), session invalidation, then the users-row delete cascades repos,
+  generations, and usage counters. Published docs pages go offline with the
+  user row — the promise Privacy Policy §9 makes.
+- **Notification emails** — set `RESEND_API_KEY` (and `EMAIL_FROM` to a
+  verified sender) and an auto-regeneration that changes the docs emails the
+  repo owner a link to the draft-vs-published diff. Unset → every send is a
+  no-op, like the alert webhook.
+- **Shareable diff view** — `GET /share/diff/{token}` renders a draft against
+  what is published without a login. The token is an HMAC over the generation
+  id (`SHARE_TOKEN_SECRET`, falling back to `SESSION_SECRET`), the page is
+  `noindex`, and the repo page has an *Open share view* / *Copy link* control.
+- **SEO** — `GET /sitemap.xml` (DB-backed) lists the marketing pages and every
+  published docs page; docs pages carry canonical + Open Graph/Twitter tags.
+  `robots.txt` allows the marketing, legal, playground and `/docs/` routes and
+  disallows `/dashboard`, `/admin`, `/login`, `/api/` and `/share`.
+
 ## Admin dashboard (`/admin`)
 
 An internal, read-only growth dashboard: total signups, signups per day, active
@@ -221,7 +253,7 @@ ADMIN_GITHUB_LOGINS=babarkhan
 4. **Quotas & spend limits BEFORE generation ships** (tech spec §4): per-plan
    quotas via `usage_counters`, daily per-user caps, global spend ceiling,
    token cost tracking per generation, circuit breaker.
-5. Monitoring (Sentry + UptimeRobot), backups, then launch readiness.
+5. ~~Monitoring~~ **Done (Sep 24):** ops alerting (`DOCLOOM_ALERT_WEBHOOK_URL`), `GET /api/health` uptime check, self-serve account deletion. Remaining: backups, launch readiness.
 
 ## Brand
 
