@@ -9,6 +9,7 @@ import { ConnectRepoModal } from "@/components/connect-repo-modal";
 import { Logo } from "@/components/logo";
 import { RepoCard } from "@/components/repo-card";
 import { SignOutButton } from "@/components/sign-out-button";
+import { DeleteAccountButton } from "@/components/delete-account-button";
 import { UpgradeButton } from "@/components/upgrade-button";
 import { isAdmin } from "@/lib/admin";
 import { dailyGenerationLimitFor, effectivePlan, maxReposFor, type Plan } from "@/lib/billing";
@@ -138,6 +139,24 @@ export default async function DashboardPage({
           })}
         </div>
       )}
+
+      {/* Danger zone — self-serve account deletion (Privacy Policy §9). */}
+      <section
+        aria-labelledby="danger-zone-heading"
+        className="mt-16 rounded-xl border border-zinc-800 p-5"
+      >
+        <h2 id="danger-zone-heading" className="text-sm font-medium text-zinc-300">
+          Danger zone
+        </h2>
+        <p className="mt-1 max-w-lg text-sm text-zinc-500">
+          Permanently delete your account, connected repos, and all generation
+          history. Published docs pages go offline immediately. This cannot be
+          undone.
+        </p>
+        <div className="mt-4">
+          <DeleteAccountButton />
+        </div>
+      </section>
     </div>
   );
 }
