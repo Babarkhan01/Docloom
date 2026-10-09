@@ -54,6 +54,35 @@ export function clientIp(request: Request): string {
   return fwd?.split(",")[0]?.trim() || "unknown";
 }
 
+/**
+ * UTC-day-aligned counter on the same in-memory store. Keyed with the day so
+ * stale days are naturally cleaned by cleanupStaleBuckets (resetAt = end of
+ * that UTC day). Used for global daily spend guards (e.g. the playground's
+ * LLM budget) that must reset on the calendar day, not on first use.
+ */
+function dayKey(key: string): string {
+  return `${key}:${new Date().toISOString().slice(0, 10)}`;
+}
+
+export function dailyCount(key: string): { count: number } {
+  const bucket = store.get(dayKey(key));
+  return { count: bucket && bucket.resetAt > Date.now() ? bucket.count : 0 };
+}
+
+export function bumpDailyCount(key: string): number {
+  const full = dayKey(key);
+  const existing = store.get(full);
+  const count = (existing && existing.resetAt > Date.now() ? existing.count : 0) + 1;
+  const endOfDay = Date.parse(`${new Date().toISOString().slice(0, 10)}T23:59:59.999Z`);
+  store.set(full, { count, resetAt: endOfDay });
+  return count;
+}
+
+/** Test hook: clear the whole in-memory store (per-process like the limiter). */
+export function __resetRateLimitStoreForTests(): void {
+  store.clear();
+}
+
 /** Periodic cleanup so the store can't grow unbounded. */
 const CLEANUP_INTERVAL_MS = 60_000;
 let lastCleanup = Date.now();
