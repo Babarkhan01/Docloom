@@ -139,12 +139,16 @@ export async function describeRoutes(routes: ParsedRoute[], repoPublic: boolean)
 
 /**
  * Per route key: prose tokens that look like field/parameter names but are
- * absent from the AST facts for that handler. Conservative on purpose —
- * false positives are acceptable; a silent hallucination is not.
+ * absent from the AST facts for that handler. Only IDENTIFIER-SHAPED tokens
+ * count — camelCase, snake_case, or a backticked code span. Bare Capitalized
+ * words are ordinary prose or proper nouns (Retrieves, GitHub, Dodo) and are
+ * never flagged; the tradeoff is a PascalCase hallucination is not caught —
+ * accepted, because the alternative flooded every description with false
+ * positives and made the check unactionable.
  *
- * A token "counts" when it appears Capitalized or snake_cased in the prose
- * and matches none of: route-context param names, dynamic segments, request
- * body fields, response fields, query/header input names (case-insensitive).
+ * Flagged tokens match none of: route-context param names, dynamic segments,
+ * request body fields, response fields, query/header input names
+ * (case-insensitively).
  */
 export function flagInventedNames(
   routes: ParsedRoute[],
@@ -168,30 +172,23 @@ export function flagInventedNames(
     if (route.responses) for (const s of route.responses) if (s.resolved) add(s.fields.map((f) => f.name));
     if (route.inputs) add(route.inputs.filter((i) => i.nameResolved).map((i) => i.name));
 
-    const mentioned = description.match(/[A-Za-z][A-Za-z0-9_]*/g) ?? [];
+    // Identifier candidates: every word inside a backticked span (explicitly
+    // identifier-position, any casing), plus bare words outside spans when
+    // they are camelCase or contain a snake_case underscore.
+    const mentioned: string[] = [];
+    const spans = [...description.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    for (const span of spans) mentioned.push(...(span.match(/[A-Za-z][A-Za-z0-9_]*/g) ?? []));
+    const bare = description.replace(/`[^`]*`/g, " ").match(/[A-Za-z][A-Za-z0-9_]*/g) ?? [];
+    mentioned.push(...bare);
+
     const invented = mentioned.filter((w) => {
-      // Field-name shapes: Capitalized, snake_case, or camelCase — camelCase
-      // is what LLMs most often invent (workspaceId, createdAt).
-      const isFieldish = /^[A-Z]/.test(w) || w.includes("_") || /^[a-z]+[A-Z]/.test(w);
-      if (!isFieldish) return false;
-      if (PROSE_WORDS.has(w.toLowerCase())) return false; // sentence-initial prose, not a field name
+      // Identifier shapes only: camelCase (the hallmark LLM invention:
+      // workspaceId, createdAt) or anything with a snake_case underscore.
+      const isIdentifierish = /^[a-z]+[A-Z]/.test(w) || /^[a-z0-9]+(_[a-z0-9]+)+$/i.test(w);
+      if (!isIdentifierish) return false;
       return !known.has(w.toLowerCase()); // known names match case-insensitively
     });
     if (invented.length > 0) out.set(key, [...new Set(invented)]);
   }
   return out;
 }
-
-/**
- * Capitalized words that are prose, not field-name hallucinations. Kept
- * deliberately small — an unknown Capitalized token stays flagged (safe
- * direction), this only removes the constant false positives.
- */
-const PROSE_WORDS = new Set([
-  "the", "this", "that", "these", "those", "a", "an", "when", "if", "and", "or", "not",
-  "returns", "return", "response", "request", "endpoint", "handler", "route", "method",
-  "lists", "creates", "updates", "deletes", "accepts", "handles", "supports", "describes",
-  "optional", "required", "array", "object", "string", "number", "boolean", "enum", "note",
-  "json", "http", "api", "url", "id", "ids", "get", "post", "put", "patch", "delete", "head",
-  "by", "with", "for", "per", "each", "based", "source", "docs", "docloom",
-]);

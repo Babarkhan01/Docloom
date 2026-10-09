@@ -10,6 +10,7 @@ import {
 } from "./llm";
 import { LlmTransportError, withBackoff } from "./llm-shared";
 import { flagInventedNames } from "./ai";
+import { buildApiMarkdown } from "./docs";
 import type { ParsedRoute } from "./route-parser";
 
 function okRes(text: string): Response {
@@ -242,7 +243,7 @@ describe("hallucination post-check (flagInventedNames)", () => {
     expect(flagInventedNames([r], descriptions).size).toBe(0);
   });
 
-  it("known names pass from any fact source regardless of prose capitalization; unknowns still flag", () => {
+  it("known names pass from any fact source regardless of prose capitalization; unknown camelCase still flags", () => {
     const r = route({
       key: "GET /workspaces/[ws]/stats",
       params: ["id"],
@@ -255,8 +256,56 @@ describe("hallucination post-check (flagInventedNames)", () => {
     ]);
     expect(flagInventedNames([r], descriptions).size).toBe(0);
 
-    const unknown = new Map([["GET /workspaces/[ws]/stats", "Returns the Grandtotal value."]]);
-    expect(flagInventedNames([r], unknown).get("GET /workspaces/[ws]/stats")).toEqual(["Grandtotal"]);
+    // Bare-Capitalized unknowns are prose/proper nouns and no longer flag
+    // (removed the / Upper-first rule after the gpt-oss-20b eval proved it
+    // false-positives on sentence starters); camelCase unknowns still do.
+    const unknown = new Map([["GET /workspaces/[ws]/stats", "Returns the grandTotal value."]]);
+    expect(flagInventedNames([r], unknown).get("GET /workspaces/[ws]/stats")).toEqual(["grandTotal"]);
+  });
+
+  it("the exact false positives from the gpt-oss-20b eval no longer flag", () => {
+    const r = route({ key: "GET /users", responseFields: ["id"] });
+    const descriptions = new Map([
+      [
+        "GET /users",
+        "Retrieves a user by ID. On error, GitHub and Dodo provide Health status. " +
+          "Registers a webhook, Performs full-text search, and May return 400. " +
+          "Adds a member, Initiates OAuth, Triggers a regen. Possible Rate limits apply. " +
+          "Provides LLM diagnostics and Errors handled. Promotes a draft, Removes a session, " +
+          "Starts a run, Processes Markdown APIs, Generates Invalidates Re It.",
+      ],
+    ]);
+    expect(flagInventedNames([r], descriptions).size).toBe(0);
+  });
+
+  it("backticked tokens are identifier-position and still flag when unknown", () => {
+    const r = route({ key: "POST /users", bodyFields: ["email"] });
+    const descriptions = new Map([
+      ["POST /users", "Creates a user; rejects a duplicate `email` and never writes `workspaceId`."],
+    ]);
+    // `email` is a known field in identifier position — fine; `workspaceId`
+    // is a backticked invented identifier — flagged even though the prose
+    // presents it as absent/never-written.
+    expect(flagInventedNames([r], descriptions).get("POST /users")).toEqual(["workspaceId"]);
+  });
+
+  it("wrapped handlers with an unresolved (null) body: invented behavior is caught, not passed", () => {
+    const r = route({ key: "GET /workspaces/[ws]/stats", dynamicSegments: ["ws"] });
+    // Simulate the wrapped-handler shape: body unresolvable.
+    r.requestBody = { source: "zod", schemaName: "Body", resolved: false, fields: [] };
+    const descriptions = new Map([
+      ["GET /workspaces/[ws]/stats", "Returns the workspaceId and memberCount for the wrapped workspace handler."],
+    ]);
+    // Facts are null here — any identifier-shaped token the model writes is
+    // by definition not grounded, so both camelCase inventions flag.
+    expect(flagInventedNames([r], descriptions).get("GET /workspaces/[ws]/stats")).toEqual([
+      "workspaceId",
+      "memberCount",
+    ]);
+    // And the structural output for such a handler names the gap instead of
+    // presenting invented fields:
+    const md = buildApiMarkdown("o/r", "main", [r], descriptions);
+    expect(md).toContain("not documented in source");
   });
 
   it("descriptions without a matching route are ignored", () => {

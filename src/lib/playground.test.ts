@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __resetPlaygroundCapacityForTests,
+  __resetDescriptionCacheForTests,
   acquirePlaygroundSlot,
   applyMarkdownCap,
   parseRepoInput,
@@ -12,11 +13,14 @@ import {
   type PlaygroundIo,
   type PublicTreeEntry,
 } from "./playground";
+import { __resetRateLimitStoreForTests } from "./rate-limit";
 import type { ParsedRoute } from "./route-parser";
+import { routeKey } from "./docs";
 
 afterEach(() => {
   vi.unstubAllEnvs();
   __resetPlaygroundCapacityForTests();
+  __resetDescriptionCacheForTests();
 });
 
 // ---------------------------------------------------------------------------
@@ -173,7 +177,7 @@ function fakeIo(opts: {
       };
     },
     async fetchTree() {
-      return { entries: opts.entries, truncated: false };
+      return { entries: opts.entries, truncated: false, treeSha: null };
     },
     async fetchBlob(_owner: string, _name: string, _ref: string, path: string) {
       blobPaths.push(path);
@@ -199,6 +203,11 @@ function fakeIo(opts: {
       diagnostics: { wrappedOpaque: [] },
       extraFiles: extra.length,
     }),
+    // Default: AI off and never called — each AI test overrides explicitly.
+    aiEnabled: () => false,
+    describeRoutes: async () => {
+      throw new Error("describeRoutes called while AI disabled");
+    },
   };
   return Object.assign(io, { blobPaths });
 }
@@ -281,5 +290,111 @@ describe("runPlaygroundGeneration", () => {
     if (!("markdown" in res)) throw new Error("expected success");
     expect(res.meta.framework).toBe("Express");
     expect(res.markdown).toContain("Express");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AI wiring — 20-route cap, budget guard, per-batch fallback, cache
+// ---------------------------------------------------------------------------
+
+describe("runPlaygroundGeneration AI wiring", () => {
+  beforeEach(() => {
+    __resetRateLimitStoreForTests();
+    __resetDescriptionCacheForTests();
+  });
+
+  function aiRoutes(n: number): ParsedRoute[] {
+    return Array.from({ length: n }, (_, i) => ({
+      ...fakeRoute,
+      method: "GET",
+      routePath: `/api/r${i}`,
+      filePath: `app/api/r${i}/route.ts`,
+      jsdoc: `Handler ${i}.`,
+    }) as unknown as ParsedRoute);
+  }
+
+  function aiIo(
+    n: number,
+    describeImpl: (routes: ParsedRoute[]) => Promise<Map<string, string>>,
+  ) {
+    const calls: ParsedRoute[][] = [];
+    const io = fakeIo({
+      entries: [entry("app/api/r0/route.ts")],
+      blobs: { "app/api/r0/route.ts": "export function GET() {}" },
+      routes: aiRoutes(n),
+    });
+    io.aiEnabled = () => true;
+    io.describeRoutes = async (routes) => {
+      calls.push(routes);
+      return {
+        descriptions: await describeImpl(routes),
+        tokensIn: 100,
+        tokensOut: 100,
+        tokensUsed: 200,
+        provider: null,
+        flagged: new Map(),
+      };
+    };
+    return Object.assign(io, { calls });
+  }
+  const aiLimits = { ...playgroundLimits(), llmBatchRoutes: 10 };
+
+  it("caps AI at the first llmRoutesMax routes; the rest keep JSDoc prose", async () => {
+    const io = aiIo(8, async (rs) => new Map(rs.map((r) => [routeKey(r), `AI: ${routeKey(r)}`])));
+    const capped = { ...aiLimits, llmRoutesMax: 5 };
+    const res = await runPlaygroundGeneration({ owner: "o", repo: "r", ref: null }, io, capped);
+    if (!("markdown" in res)) throw new Error("expected success");
+
+    // Only the first 5 routes were sent to the LLM, in one batch of ≤10.
+    expect(io.calls).toHaveLength(1);
+    expect(io.calls[0]).toHaveLength(5);
+    expect(res.markdown).toContain("AI: GET /api/r0");
+    expect(res.markdown).toContain("AI: GET /api/r4");
+    expect(res.markdown).not.toContain("AI: GET /api/r5");
+    expect(res.markdown).toContain("AI descriptions for the first 5 of 8 routes");
+    expect(res.markdown).toContain("Handler 5."); // route 5 keeps its JSDoc
+  });
+
+  it("falls back to JSDoc for a batch whose LLM call fails, and still returns 200-shaped output", async () => {
+    const io = aiIo(3, async () => {
+      throw new Error("groq down");
+    });
+    const res = await runPlaygroundGeneration({ owner: "o", repo: "r", ref: null }, io, {
+      ...aiLimits,
+      llmRoutesMax: 3,
+      llmBatchRoutes: 2, // two batches; both fail
+    });
+    if (!("markdown" in res)) throw new Error("expected success");
+    expect(res.markdown).toContain("Handler 0."); // JSDoc fallback prose survived
+    expect(res.markdown).toContain("the LLM did not respond");
+    expect(res.markdown).not.toContain("AI:");
+  });
+
+  it("stops calling the LLM once the global daily budget is exhausted and names it honestly", async () => {
+    const io = aiIo(4, async (rs) => new Map(rs.map((r) => [routeKey(r), `AI: ${routeKey(r)}`])));
+    // Budget: 1 LLM call allowed today. Batch 1 (2 routes) spends it; batch 2 skips.
+    const res = await runPlaygroundGeneration({ owner: "o", repo: "r", ref: null }, io, {
+      ...aiLimits,
+      llmRoutesMax: 4,
+      llmBatchRoutes: 2,
+      llmDailyMax: 1,
+    });
+    if (!("markdown" in res)) throw new Error("expected success");
+    expect(io.calls).toHaveLength(1); // batch 2 never went to the model
+    expect(res.markdown).toContain("AI: GET /api/r0");
+    expect(res.markdown).toContain("AI: GET /api/r1");
+    expect(res.markdown).not.toContain("AI: GET /api/r2");
+    expect(res.markdown).toContain("first 2 of 4 routes"); // honest scope note
+  });
+
+  it("serves an unchanged repo from cache on the second run — zero LLM calls", async () => {
+    const io = aiIo(4, async (rs) => new Map(rs.map((r) => [routeKey(r), `AI: ${routeKey(r)}`])));
+    const runOnce = () => runPlaygroundGeneration({ owner: "o", repo: "r", ref: null }, io, aiLimits);
+    const first = await runOnce();
+    const second = await runOnce();
+    if (!("markdown" in first) || !("markdown" in second)) throw new Error("expected success");
+    expect(io.calls).toHaveLength(1); // only the first run hit the model
+    expect(second.markdown).toBe(first.markdown);
+    expect(second.markdown).toContain("AI: GET /api/r0"); // still AI prose, from cache
   });
 });
