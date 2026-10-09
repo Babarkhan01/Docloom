@@ -29,6 +29,11 @@ export type GenerationCoverage = {
   opaqueHandlers?: { method: string; filePath: string }[];
   /** Detected server framework when it is NOT App Router (e.g. "Express", "NestJS"). */
   unsupportedFramework?: string | null;
+  /** AI prose coverage: descriptions written for aiFor of aiOf routes (budgeted scope). */
+  aiFor?: number;
+  aiOf?: number;
+  /** AI prose entirely unavailable this run, and why (budget reached, or the LLM failed). */
+  aiSkipped?: "llm-budget" | "llm-unavailable";
 };
 
 /** Top-of-doc summary: what we parsed / what we couldn't. */
@@ -64,6 +69,29 @@ function coverageNoteLines(coverage: GenerationCoverage): string[] {
   if (coverage.unsupportedFramework) {
     lines.push(
       `> **Framework note:** this repository appears to use ${coverage.unsupportedFramework} for its HTTP endpoints. Docloom currently indexes Next.js App Router route handlers (\`route.ts\` / \`route.tsx\` files), so those endpoints are not documented in source.`,
+      "",
+    );
+  }
+  if (coverage.aiFor !== undefined && coverage.aiOf !== undefined) {
+    if (coverage.aiFor >= coverage.aiOf) {
+      lines.push(
+        `> **AI descriptions:** AI-written for all ${coverage.aiOf} route${coverage.aiOf === 1 ? "" : "s"} from the AST facts below.`,
+        "",
+      );
+    } else {
+      lines.push(
+        `> **AI descriptions:** AI descriptions for the first ${coverage.aiFor} of ${coverage.aiOf} routes — the remaining ${coverage.aiOf - coverage.aiFor} keep their JSDoc/source facts only.`,
+        "",
+      );
+    }
+  } else if (coverage.aiSkipped === "llm-budget") {
+    lines.push(
+      "> **AI descriptions:** unavailable for this run — the daily playground LLM budget was reached, so routes keep their JSDoc/source facts only.",
+      "",
+    );
+  } else if (coverage.aiSkipped === "llm-unavailable") {
+    lines.push(
+      "> **AI descriptions:** unavailable for this run — the LLM did not respond, so routes keep their JSDoc/source facts only.",
       "",
     );
   }
