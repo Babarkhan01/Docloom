@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activeProviderName } from "@/lib/ai";
 import { lastLlmFailure } from "@/lib/llm";
+import { playgroundLlmFallback } from "@/lib/playground";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +49,9 @@ export async function GET() {
     status: ok ? "ok" : "degraded",
     db: ok ? "ok" : "error",
     llmProvider: provider ?? "configured: none",
+    // Playground budget guard state (boolean only): true = playground runs
+    // are in non-AI fallback because the daily LLM budget is exhausted.
+    playgroundLlmFallback: playgroundLlmFallback(),
   };
   if (llm) payload.llmLastFailure = llm;
   return NextResponse.json(payload, { status: ok ? 200 : 503 });
