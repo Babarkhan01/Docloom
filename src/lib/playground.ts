@@ -4,8 +4,10 @@ import {
   parseRouteFilesWithDiagnostics,
   schemaImportCandidates,
 } from "./route-parser";
-import { buildApiMarkdown, type GenerationCoverage } from "./docs";
-import { rateLimit } from "./rate-limit";
+import { buildApiMarkdown, routeKey, type GenerationCoverage } from "./docs";
+import { rateLimit, dailyCount, bumpDailyCount } from "./rate-limit";
+import { aiEnabled, describeRoutes } from "./ai";
+import type { ParsedRoute } from "./route-parser";
 
 /**
  * Playground: no-signup docs generation for PUBLIC GitHub repos.
@@ -16,9 +18,13 @@ import { rateLimit } from "./rate-limit";
  * - Public data only, through GitHub's public REST API — never the GitHub App
  *   installation tokens, never OAuth. Private repos are refused with the
  *   Starter pitch instead.
- * - No DB, no AI: the pipeline is the same pure parser + markdown builder the
+ * - No DB: the pipeline is the same pure parser + markdown builder the
  *   demo scripts prove offline (scripts/generate-demo-docs.mjs). Nothing is
  *   persisted — source is processed in memory and dropped (project principle).
+ *   Descriptions come from the LLM when one is configured (LLM_PROVIDER),
+ *   capped at the first PLAYGROUND_LLM_ROUTES_MAX routes per run and wrapped
+ *   in a per-UTC-day request budget; any LLM failure falls back to the
+ *   JSDoc/AST prose instead of failing the request.
  * - Bounded spend: per-IP daily + burst rate limits, a global hourly run cap
  *   (tight when PLAYGROUND_GITHUB_TOKEN is unset — GitHub's anonymous limit is
  *   the real ceiling), a concurrency guard, and per-run file/size caps sized
@@ -134,8 +140,9 @@ export async function fetchPublicTree(
   owner: string,
   name: string,
   ref: string,
-): Promise<{ entries: PublicTreeEntry[]; truncated: boolean }> {
+): Promise<{ entries: PublicTreeEntry[]; truncated: boolean; treeSha: string | null }> {
   const data = await publicGithubFetch<{
+    sha?: string;
     tree?: { path: string; type: string; size?: number }[];
     truncated?: boolean;
   }>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/trees/${encodeURIComponent(ref)}?recursive=1`);
@@ -146,6 +153,9 @@ export async function fetchPublicTree(
       size: e.size ?? null,
     })),
     truncated: data.truncated === true,
+    // Content identity of the snapshot — the description-cache key component
+    // that guarantees a cached description is for exactly this source state.
+    treeSha: data.sha ?? null,
   };
 }
 
@@ -183,6 +193,12 @@ export type PlaygroundLimits = {
   dailyIpLimit: number;
   hourlyRunCap: number;
   concurrency: number;
+  /** Routes per run sent to the LLM — the rest keep JSDoc/AST fallback prose. */
+  llmRoutesMax: number;
+  /** Routes per describeRoutes call — sized so one batch ≈ ≤4K tokens (8K TPM budget). */
+  llmBatchRoutes: number;
+  /** Global per-UTC-day cap on playground LLM calls (batches), all IPs combined. */
+  llmDailyMax: number;
 };
 
 function envInt(key: string, def: number, min: number, max: number): number {
@@ -205,6 +221,12 @@ export function playgroundLimits(): PlaygroundLimits {
     // PAT is effectively required for real traffic.
     hourlyRunCap: envInt("PLAYGROUND_HOURLY_RUN_CAP", hasToken ? 60 : 1, 1, 10_000),
     concurrency: envInt("PLAYGROUND_CONCURRENCY", 2, 1, 10),
+    // 20 routes ≈ 8K tokens at the measured ~400 tok/route — exactly the
+    // groq free-tier TPM budget, so one run can never crowd out a minute's
+    // whole allowance on its own.
+    llmRoutesMax: envInt("PLAYGROUND_LLM_ROUTES_MAX", 20, 0, 50),
+    llmBatchRoutes: envInt("PLAYGROUND_LLM_BATCH_ROUTES", 10, 1, 20),
+    llmDailyMax: envInt("PLAYGROUND_LLM_DAILY_MAX", 300, 1, 100_000),
     // The entry cap is the durable limit that keeps a single run from trying to
     // parse a monorepo the size of Next.js. It is intentionally generously
     // sized (defaults 20,000 files) so that real multi-package repos still
@@ -268,6 +290,11 @@ export function __resetPlaygroundCapacityForTests(): void {
   hourUsed = 0;
 }
 
+/** Test seam — the description cache must not leak between tests either. */
+export function __resetDescriptionCacheForTests(): void {
+  descCache.clear();
+}
+
 // ---------------------------------------------------------------------------
 // Markdown size cap — a huge repo's docs are truncated with a named note,
 // never silently and never by dropping the honest-coverage header.
@@ -293,15 +320,90 @@ export type PlaygroundIo = {
   fetchBlob: typeof fetchPublicBlob;
   parseRouteFiles: typeof parseRouteFilesWithDiagnostics;
   parseRouteFilesCrossFile: typeof parseRouteFilesCrossFile;
+  /** Injectable so tests can count LLM calls / drive failures without network. */
+  aiEnabled: typeof aiEnabled;
+  describeRoutes: typeof describeRoutes;
 };
 
-const defaultIo: PlaygroundIo = {
+export const defaultIo: PlaygroundIo = {
   fetchMeta: fetchPublicRepoMeta,
   fetchTree: fetchPublicTree,
   fetchBlob: fetchPublicBlob,
   parseRouteFiles: parseRouteFilesWithDiagnostics,
   parseRouteFilesCrossFile: parseRouteFilesCrossFile,
+  aiEnabled,
+  describeRoutes,
 };
+
+// ---------------------------------------------------------------------------
+// Description cache + LLM budget plumbing
+// ---------------------------------------------------------------------------
+
+const LLM_BUDGET_KEY = "playground:llm:daily";
+const BATCH_PAUSE_MS = 2_000; // between batches; the gateway handles 429 Retry-After
+const DESC_CACHE_MAX = 2_000; // evict-oldest; descriptions are small strings
+const descCache = new Map<string, string>();
+
+function chunk<T>(arr: T[], n: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((r) => setTimeout(r, ms));
+}
+
+function cachePut(key: string, description: string): void {
+  if (descCache.size >= DESC_CACHE_MAX) {
+    const oldest = descCache.keys().next().value;
+    if (oldest !== undefined) descCache.delete(oldest);
+  }
+  descCache.set(key, description);
+}
+
+/**
+ * Cache key for one route's description: content identity of everything the
+ * prose was grounded on — repo, tree SHA (source snapshot), and the parsed
+ * facts signature. Any fact change → miss → a fresh LLM call.
+ */
+async function descCacheKey(repoFullName: string, treeSha: string | null, r: ParsedRoute): Promise<string> {
+  const sig = [
+    r.method ?? "?",
+    r.routePath,
+    r.filePath,
+    (r.params ?? []).map((p) => `${p.name}:${p.typeResolved ? p.type : "?"}`).join(","),
+    r.requestBody
+      ? r.requestBody.resolved
+        ? r.requestBody.fields.map((f) => `${f.name}:${f.type}`).join(",")
+        : "unresolved"
+      : "none",
+    (r.responses ?? [])
+      .map((s) => `${s.status ?? "?"}:${s.resolved ? s.fields.map((f) => f.name).join("+") : "?"}`)
+      .join(";"),
+    (r.inputs ?? [])
+      .map((i) => `${i.kind}:${i.nameResolved ? i.name : "?"}:${i.typed && i.typeResolved ? i.type : "?"}`)
+      .join(","),
+    r.jsdoc ?? "",
+  ].join("|");
+  return sha256Hex(`${repoFullName}|${treeSha ?? "unknown-ref"}|${sig}`);
+}
+
+/** SHA-256 over Web Crypto — available on both Node and Cloudflare Workers. */
+async function sha256Hex(s: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Health surfacing (boolean only): true when the playground's global daily
+ * LLM budget is exhausted, so playground runs are in non-AI fallback.
+ */
+export function playgroundLlmFallback(): boolean {
+  return dailyCount(LLM_BUDGET_KEY).count >= playgroundLimits().llmDailyMax;
+}
 
 export type PlaygroundRunMeta = {
   repo: string;
@@ -356,7 +458,7 @@ export async function runPlaygroundGeneration(
   }
   const ref = input.ref ?? meta.defaultBranch;
 
-  let tree: { entries: PublicTreeEntry[]; truncated: boolean };
+  let tree: { entries: PublicTreeEntry[]; truncated: boolean; treeSha: string | null };
   try {
     tree = await io.fetchTree(meta.owner, meta.name, ref);
   } catch (err) {
@@ -494,9 +596,83 @@ export async function runPlaygroundGeneration(
     coverage = { filesSkipped: 0, fileCap: limits.maxFiles, unsupportedFramework };
   }
 
-  // No AI in the playground: descriptions come from JSDoc fallbacks in
-  // buildApiMarkdown. Zero tokens, zero model calls.
-  const raw = buildApiMarkdown(meta.fullName, ref, routes, new Map(), coverage);
+  // ---------------------------------------------------------------------------
+  // AI prose over the AST facts — budgeted, paced, and failure-tolerant:
+  //
+  // - Scope: the FIRST llmRoutesMax (default 20) routes; the rest keep the
+  //   JSDoc/AST fallback prose (the note says exactly that).
+  // - Batches of llmBatchRoutes (default 10 ≈ 4K tokens) so a 20-route run
+  //   spends ≤8K tokens — the groq free-tier TPM budget — and a 2s pause
+  //   between batches keeps two runs in a minute inside it too.
+  // - The gateway already retries 429/5xx honoring Retry-After; a batch that
+  //   still fails degrades to JSDoc for itself only — the request returns
+  //   HTTP 200 with structural output, never an LLM error.
+  // - Cache: descriptions keyed by repo + tree SHA + route signature. Repeat
+  //   hits on an unchanged repo cost zero LLM calls and zero daily budget.
+  // - Global guard: llmDailyMax (default 300) playground LLM calls per UTC
+  //   day protect the shared Groq org limits for the signed-in flows.
+  // ---------------------------------------------------------------------------
+  const descriptions = new Map<string, string>();
+  let aiFor: number | undefined;
+  let aiOf: number | undefined;
+  let aiSkipped: "llm-budget" | "llm-unavailable" | undefined;
+
+  if (routes.length > 0 && io.aiEnabled()) {
+    if (limits.llmRoutesMax > 0) {
+      const scoped = routes.slice(0, limits.llmRoutesMax);
+      aiOf = scoped.length;
+      const batches = chunk(scoped, limits.llmBatchRoutes);
+      for (let b = 0; b < batches.length; b++) {
+        const batch = batches[b];
+        const uncached: ParsedRoute[] = [];
+        for (const r of batch) {
+          const key = await descCacheKey(meta.fullName, tree.treeSha, r);
+          const hit = descCache.get(key);
+          if (hit !== undefined) descriptions.set(routeKey(r), hit);
+          else uncached.push(r);
+        }
+        if (uncached.length > 0) {
+          if (dailyCount(LLM_BUDGET_KEY).count >= limits.llmDailyMax) {
+            aiSkipped = "llm-budget";
+            break; // remaining batches fall back silently (still counted below)
+          }
+          bumpDailyCount(LLM_BUDGET_KEY);
+          try {
+            const res = await io.describeRoutes(uncached, /* repoPublic */ true);
+            for (const [k, v] of res.descriptions) {
+              descriptions.set(k, v);
+              const r = uncached.find((x) => routeKey(x) === k);
+              if (r) cachePut(await descCacheKey(meta.fullName, tree.treeSha, r), v);
+            }
+          } catch {
+            // This batch keeps its JSDoc/AST prose; later batches still try.
+          }
+          if (b < batches.length - 1) await sleep(BATCH_PAUSE_MS);
+        }
+      }
+      aiFor = descriptions.size > 0 ? descriptions.size : undefined;
+      if (descriptions.size === 0 && !aiSkipped) aiSkipped = "llm-unavailable";
+      aiOf = routes.length; // the note references the whole document, not just the scope
+    }
+    // llmRoutesMax === 0 is an explicit operator choice to disable playground
+    // AI entirely — that needs no coverage note.
+  }
+
+  if (aiFor !== undefined && aiOf !== undefined) {
+    coverage = {
+      ...(coverage ?? { filesSkipped: eligible.length - candidates.length, fileCap: limits.maxFiles }),
+      aiFor,
+      aiOf,
+      ...(aiSkipped ? { aiSkipped } : {}),
+    };
+  } else if (aiSkipped) {
+    coverage = {
+      ...(coverage ?? { filesSkipped: eligible.length - candidates.length, fileCap: limits.maxFiles }),
+      aiSkipped,
+    };
+  }
+
+  const raw = buildApiMarkdown(meta.fullName, ref, routes, descriptions, coverage);
   const capped = applyMarkdownCap(raw, limits.maxMarkdownBytes);
 
   return {
