@@ -133,7 +133,19 @@ export async function GET(request: NextRequest) {
     });
     return response;
   } catch (err) {
-    console.error("OAuth callback failed:", err);
+    // Log the underlying database error identity — code + message only, and
+    // unwrapped from DrizzleQueryError: its own .message IS "Failed query:
+    // <full SQL with placeholders>" and its .params can carry token material,
+    // so neither is ever logged. The inner Postgres error (err.cause) carries
+    // e.g. code 42703 "column X does not exist" — the schema-drift signal.
+    const cause = (err as { cause?: unknown }).cause;
+    const pg = (cause ?? err) as { code?: string; message?: string; detail?: string };
+    console.error(
+      "OAuth callback failed:",
+      pg.code ?? "NO_PG_CODE",
+      pg.message ?? String(err),
+      pg.detail ? `detail: ${pg.detail}` : "",
+    );
     return redirectToLogin(request, FAIL.github_error);
   }
 }
