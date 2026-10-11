@@ -1,1 +1,1 @@
-ALTER TABLE "users" ADD COLUMN "grandfatheredPriceCents" bigint;--> statement-breakpoint
+ALTER TABLE "users" ADD COLUMN "grandfathered_price_cents" bigint;
