@@ -1,1 +1,1 @@
-ALTER TABLE "users" ADD COLUMN "grandfathered_price_cents" bigint;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "grandfathered_price_cents" bigint;
