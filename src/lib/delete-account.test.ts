@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { deleteAccount, type DeleteAccountStore, type DodoCancel } from "./delete-account";
+import {
+  deleteAccount,
+  CANCEL_BLOCKED_USER_MESSAGE,
+  type DeleteAccountStore,
+  type DodoCancel,
+} from "./delete-account";
 
 function makeStore(userId: string) {
   const state = {
@@ -36,7 +41,7 @@ describe("deleteAccount", () => {
 
     const res = await deleteAccount(store, dodo, "u1");
 
-    expect(res).toEqual({ ok: true, subscriptionCancelled: true, subscriptionNote: null });
+    expect(res).toEqual({ ok: true, subscriptionCancelled: true });
     expect(cancelCalls).toEqual(["sub_123"]);
     expect(state.sessionVersion).toBe(1);
     expect(state.deleted).toBe(true);
@@ -47,12 +52,12 @@ describe("deleteAccount", () => {
     const cancel = vi.fn();
     const res = await deleteAccount(store, { cancelSubscription: cancel }, "u1");
 
-    expect(res).toEqual({ ok: true, subscriptionCancelled: false, subscriptionNote: null });
+    expect(res).toEqual({ ok: true, subscriptionCancelled: false });
     expect(cancel).not.toHaveBeenCalled();
     expect(state.deleted).toBe(true);
   });
 
-  it("a failed Dodo cancel does NOT block deletion — it is reported to the user", async () => {
+  it("a failed Dodo cancel ABORTS deletion — account and data untouched", async () => {
     const { state, store } = makeStore("u1");
     state.subscriptionId = "sub_123";
     const dodo: DodoCancel = {
@@ -63,13 +68,48 @@ describe("deleteAccount", () => {
 
     const res = await deleteAccount(store, dodo, "u1");
 
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.subscriptionCancelled).toBe(false);
-      expect(res.subscriptionNote).toContain("HTTP 502");
-      expect(res.subscriptionNote).toContain("payment portal");
-    }
-    expect(state.deleted).toBe(true);
+    expect(res).toEqual({
+      ok: false,
+      failedAt: "subscription_cancel",
+      error: CANCEL_BLOCKED_USER_MESSAGE,
+    });
+    // Nothing was deleted or invalidated — the account stays intact.
+    expect(state.sessionVersion).toBe(0);
+    expect(state.deleted).toBe(false);
+  });
+
+  it("the cancel-failure user message is fixed — it never embeds upstream error text", async () => {
+    const { store } = makeStore("u1");
+    const dodo: DodoCancel = {
+      async cancelSubscription() {
+        throw new Error("Bearer sk_live_SECRET_TOKEN rejected");
+      },
+    };
+
+    const res = await deleteAccount(
+      { ...store, findSubscriptionId: async () => "sub_123" },
+      dodo,
+      "u1",
+    );
+
+    // A leaking upstream message must not reach the result at all.
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe(CANCEL_BLOCKED_USER_MESSAGE);
+    expect(res.ok === false && res.error.includes("sk_live")).toBe(false);
+  });
+
+  it("subscription present but billing disabled: refuses to delete a paying account", async () => {
+    const { state, store } = makeStore("u1");
+    state.subscriptionId = "sub_123";
+
+    const res = await deleteAccount(store, null, "u1");
+
+    expect(res).toEqual({
+      ok: false,
+      failedAt: "subscription_cancel",
+      error: CANCEL_BLOCKED_USER_MESSAGE,
+    });
+    expect(state.deleted).toBe(false);
   });
 
   it("session invalidation failure aborts before user delete (fail-locked, not half-deleted)", async () => {

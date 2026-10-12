@@ -75,6 +75,15 @@ async function deleteAccountHandler(request: NextRequest) {
         configuredSinks(),
       );
     }).catch(() => {});
+    // A failed Dodo cancel is NOT a server fault — it's a deliberate abort to
+    // protect the user's money, so it answers 409 (retryable by the user) and
+    // returns the fixed guidance message verbatim.
+    if (result.failedAt === "subscription_cancel") {
+      return NextResponse.json(
+        { error: "subscription_cancel_failed", message: result.error },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { error: "deletion_failed", message: "Deletion failed — please try again or contact support." },
       { status: 500 },
@@ -83,25 +92,9 @@ async function deleteAccountHandler(request: NextRequest) {
 
   track(userId, "account_deleted", { subscriptionCancelled: result.subscriptionCancelled });
 
-  if (result.subscriptionNote) {
-    // The account is gone but a live subscription may remain — make sure the
-    // operator knows, since the user has no dashboard to see this in.
-    runAfterResponse(async () => {
-      await dispatchAlert(
-        {
-          title: "Account deleted with un-cancelled Dodo subscription",
-          body: `user ${userId}: ${result.subscriptionNote}`,
-          severity: "warning",
-        },
-        configuredSinks(),
-      );
-    }).catch(() => {});
-  }
-
   const response = NextResponse.json({
     deleted: true,
     subscriptionCancelled: result.subscriptionCancelled,
-    subscriptionNote: result.subscriptionNote,
   });
   response.cookies.set(SESSION_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
   return response;

@@ -3,11 +3,12 @@
  * self-serve deletion "through your account settings, or by contacting us").
  *
  * Order of operations (each step independently safe to fail/retry):
- *  1. Best-effort Dodo subscription cancel — the money relationship is the
- *     one thing DB cascades cannot undo. A no-show webhook is healed by the
- *     resync endpoint; a failed cancel is surfaced to the caller so the UI
- *     can tell the user to cancel from Dodo's portal instead of silently
- *     leaving a live subscription on a dead account.
+ *  1. Dodo subscription cancel — REQUIRED, not best-effort. The money
+ *     relationship is the one thing DB cascades cannot undo: deleting the
+ *     account below would orphan a live subscription that keeps billing a
+ *     person we can no longer reach. If the cancel fails, deletion aborts
+ *     (data untouched, account usable), the user gets a clear retry-after-
+ *     portal message, and the route alerts ops.
  *  2. Bump session_version — every issued session token is rejected
  *     server-side immediately; the account is inert from this moment.
  *  3. Delete the users row. FKs are ON DELETE CASCADE from users →
@@ -25,6 +26,7 @@
 
 export type DeletionStep =
   | "subscription_cancel"
+  | "subscription_cancel_failed"
   | "session_invalidation"
   | "user_delete";
 
@@ -45,12 +47,17 @@ export type DodoCancel = {
 export type DeleteAccountResult =
   | {
       ok: true;
-      /** true when Dodo confirmed the cancel; false = best-effort skipped. */
+      /** true when the user had a subscription and Dodo confirmed the cancel. */
       subscriptionCancelled: boolean;
-      /** When the Dodo cancel failed: guidance for the user. */
-      subscriptionNote: string | null;
     }
   | { ok: false; failedAt: DeletionStep; error: string };
+
+/** Fixed, safe user-facing message for a failed cancel — never interpolated
+ *  with raw upstream error text, which could carry provider boilerplate. */
+export const CANCEL_BLOCKED_USER_MESSAGE =
+  "We couldn't cancel your subscription before deleting your account, so deletion " +
+  "was stopped — your data is untouched. Please cancel the subscription from your " +
+  "payment portal (Dodo Payments), then delete your account again from here.";
 
 export async function deleteAccount(
   store: DeleteAccountStore,
@@ -60,19 +67,29 @@ export async function deleteAccount(
   const subscriptionId = await store.findSubscriptionId(userId);
 
   let subscriptionCancelled = false;
-  let subscriptionNote: string | null = null;
   if (subscriptionId && dodo) {
     try {
       await dodo.cancelSubscription(subscriptionId);
       subscriptionCancelled = true;
     } catch (err) {
-      // Money handling is best-effort here, but never silent: the UI tells
-      // the user exactly what to do, and Dodo's own portal still works.
-      subscriptionNote =
-        err instanceof Error
-          ? `We couldn't cancel your Dodo subscription automatically (${err.message}). Please cancel it from your payment portal — no further charges occur after cancellation.`
-          : "We couldn't cancel your subscription automatically. Please cancel it from your payment portal.";
+      // Abort: never delete data while a subscription might still bill.
+      // The error surface to the user is the fixed, safe message; the raw
+      // error identity is only for ops (the route logs+alerts it).
+      console.error(`[delete-account] Dodo cancel failed for ${userId}:`, err);
+      return {
+        ok: false,
+        failedAt: "subscription_cancel",
+        error: CANCEL_BLOCKED_USER_MESSAGE,
+      };
     }
+  } else if (subscriptionId && !dodo) {
+    // Billing disabled mid-flight (envs removed): refuse to delete a paying
+    // account we can no longer cancel. Same conservative abort.
+    return {
+      ok: false,
+      failedAt: "subscription_cancel",
+      error: CANCEL_BLOCKED_USER_MESSAGE,
+    };
   }
 
   try {
@@ -89,7 +106,7 @@ export async function deleteAccount(
 
   try {
     await store.deleteUser(userId);
-    return { ok: true, subscriptionCancelled, subscriptionNote };
+    return { ok: true, subscriptionCancelled };
   } catch (err) {
     return {
       ok: false,
