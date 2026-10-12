@@ -81,6 +81,17 @@ type SubscriptionPayload = {
   plan_id?: string;
   /** Present on subscription.updated / cancelled payloads. */
   cancelled_at?: string;
+  /**
+   * Dodo payloads always carry the next scheduled billing — i.e. the END of
+   * the current paid period. Used to keep paid access until the period a
+   * customer already paid for actually ends, after a cancellation.
+   */
+  next_billing_date?: string;
+  /**
+   * Deadline of an open payment-failure grace window (subscription.past_due
+   * payload). Falls back to the 7-day policy window when absent.
+   */
+  past_due_ends_at?: string;
 };
 
 type WebhookBody = {
@@ -91,10 +102,10 @@ type WebhookBody = {
 /**
  * Keep-path for a cancelled sub that has live survivors: re-point the tracked
  * subscription at the best survivor and align the plan to it. Preference:
- * active Team > active Starter > any active > first live — mirroring the
+ * active Team > active Pro > any active > first live — mirroring the
  * resync endpoint's tier logic, so the user is never left below what an
- * active survivor pays for (cancelling a Starter test sub while a Team sub
- * is live lands back on team, never starter). Plan is set only from an
+ * active survivor pays for (cancelling a Pro test sub while a Team sub
+ * is live lands back on team, never pro). Plan is set only from an
  * active survivor's mapped product; an unknown product keeps the current
  * plan. The row is only rewritten when it was tracking the cancelled sub.
  */
@@ -165,6 +176,18 @@ async function applySubscriptionState(opts: {
 
   const graceUntil = () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // PRD policy: 7-day grace
 
+  /**
+   * Paid access until the end of the period the customer already paid for.
+   * Read from the payload's next_billing_date when present; a payload without
+   * it (or one whose date is already past) falls back to the 7-day grace —
+   * conservative, never a longer-than-paid access window.
+   */
+  const paidUntilFromPeriodEnd = (): Date => {
+    const raw = sub.next_billing_date ? new Date(sub.next_billing_date) : null;
+    if (raw && !Number.isNaN(raw.getTime()) && raw.getTime() > Date.now()) return raw;
+    return graceUntil();
+  };
+
   switch (event) {
     case "subscription.active":
     case "subscription.renewed":
@@ -205,11 +228,21 @@ async function applySubscriptionState(opts: {
           const note = await keepBestSurvivor(userId, sub.subscription_id, survivors);
           return { handled: true, note: `${status} — ${note}` };
         }
+        // Survivor check first, then the paid-period promise: the plan stays
+        // honoured until the end of the period already paid for (Terms §7),
+        // by borrowing dodoGraceUntil as the paid-through timestamp — plan
+        // column untouched (it still says what the sub bought). An outdated
+        // next_billing_date falls back to the 7-day grace — never longer
+        // than what the customer actually bought.
         await db
           .update(users)
-          .set({ dodoSubscriptionStatus: status, dodoGraceUntil: null, plan: "free", updatedAt: new Date() })
+          .set({
+            dodoSubscriptionStatus: "cancelled",
+            dodoGraceUntil: paidUntilFromPeriodEnd(),
+            updatedAt: new Date(),
+          })
           .where(eq(users.id, userId));
-        return { handled: true, note: `${status} — downgraded to free` };
+        return { handled: true, note: `${status} — plan kept until the paid period ends` };
       }
       return { handled: false, note: `subscription.updated with unhandled status ${status}` };
     }
@@ -244,11 +277,55 @@ async function applySubscriptionState(opts: {
         const note = await keepBestSurvivor(userId, sub.subscription_id, survivors);
         return { handled: true, note: `${event} — ${note}` };
       }
+      // Expired means end-of-term (Dodo itself decided it) — free immediately.
+      if (event === "subscription.expired") {
+        await db
+          .update(users)
+          .set({ dodoSubscriptionStatus: "expired", dodoGraceUntil: null, plan: "free", updatedAt: new Date() })
+          .where(eq(users.id, userId));
+        return { handled: true, note: "expired (term end) — downgraded to free" };
+      }
+      // Cancelled: keep the plan until the paid period ends (Terms §7) via
+      // the same borrowed-grace mechanism as the subscription.updated path.
       await db
         .update(users)
-        .set({ dodoSubscriptionStatus: event === "subscription.cancelled" ? "cancelled" : "expired", dodoGraceUntil: null, plan: "free", updatedAt: new Date() })
+        .set({ dodoSubscriptionStatus: "cancelled", dodoGraceUntil: paidUntilFromPeriodEnd(), updatedAt: new Date() })
         .where(eq(users.id, userId));
-      return { handled: true, note: `${event} — downgraded to free` };
+      return { handled: true, note: "cancelled — plan kept until the paid period ends" };
+    }
+
+    case "subscription.past_due": {
+      // Renewal failed but the grace period is open (past_due_ends_at in the
+      // payload). Same semantics as on_hold, using Dodo's own deadline when
+      // present. Refunds/chargebacks never arrive as past_due.
+      const pdRaw = sub.past_due_ends_at ? new Date(sub.past_due_ends_at) : null;
+      const deadline = pdRaw && !Number.isNaN(pdRaw.getTime()) && pdRaw.getTime() > Date.now() ? pdRaw : graceUntil();
+      await db
+        .update(users)
+        .set({ dodoSubscriptionStatus: "on_hold", dodoGraceUntil: deadline, updatedAt: new Date() })
+        .where(eq(users.id, userId));
+      return { handled: true, note: "past_due — paid access kept until the payload's grace deadline" };
+    }
+
+    /** Marked as refunded/chargeback — revoke paid access IMMEDIATELY. */
+    case "refund.created":
+    case "refund.succeeded":
+    case "refund.processed":
+    case "dispute.created":
+    case "dispute.open":
+    case "dispute.accepted":
+    case "dispute.escalated":
+    case "dispute.won_later": {
+      await db
+        .update(users)
+        .set({
+          dodoSubscriptionStatus: "cancelled",
+          dodoGraceUntil: null,
+          plan: "free",
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId));
+      return { handled: true, note: `${event} — refund/chargeback: plan revoked immediately, downgraded to free` };
     }
 
     default:
