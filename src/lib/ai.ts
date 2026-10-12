@@ -8,7 +8,7 @@
  * LLM_PROVIDER the module runs in stub mode (empty map), letting the pipeline
  * produce fully structural docs locally and in the public playground.
  */
-import { generateText, LlmError, type ProviderId } from "./llm";
+import { generateText, providerReady, LlmError, type ProviderId } from "./llm";
 import { routeKey } from "./docs";
 import type { ParsedRoute } from "./route-parser";
 
@@ -17,6 +17,12 @@ export type DescribeResult = {
   tokensUsed: number;
   /** Provider actually used for this batch (null = stub/no-AI path). */
   provider: ProviderId | null;
+  /**
+   * True when NO provider approved for private-source processing could be
+   * used for a private repo — the caller must render the honest AST-only
+   * note (see generation.ts), never blind prose. False on public repos.
+   */
+  privacyFallback: boolean;
   /**
    * Flagged, not dropped: per route key, prose tokens that look like
    * parameter/field names but are absent from the AST facts for that handler.
@@ -29,6 +35,42 @@ export function activeProviderName(): ProviderId | null {
   const name = (process.env.LLM_PROVIDER ?? "").trim().toLowerCase();
   if (name === "groq" || name === "nebius" || name === "anthropic") return name;
   return null;
+}
+
+/**
+ * Provider ACTUALLY used for a batch, honoring the privacy constraint:
+ *
+ * - Public repo (or no repo at all): the configured provider, as before.
+ * - Private repo on a plan that allows them: use a provider approved for
+ *   private-source processing (Nebius, in that order Anthropic) — the
+ *   default provider is bypassed when its terms don't cover private code
+ *   (groq free tier). NEVER silently degrade: the caller receives which
+ *   provider ran, or `privacyFallback: true` when NO approved provider is
+ *   configured, so the pipeline can emit an honest visible note instead of
+ *   pretending prose was written.
+ */
+export function providerForBatch(repoPublic: boolean): {
+  provider: ProviderId | null;
+  privacyFallback: boolean;
+} {
+  if (repoPublic) return { provider: activeProviderName(), privacyFallback: false };
+
+  // Private: default provider is fine when it is NOT groq (or groq private
+  // use is explicitly opted in via ALLOW_PRIVATE_ON_GROQ=true).
+  const configured = activeProviderName();
+  if (configured === "nebius" || configured === "anthropic") {
+    return { provider: configured, privacyFallback: false };
+  }
+
+  // Fall through the approved-for-private providers by preference.
+  for (const candidate of ["nebius", "anthropic"] as ProviderId[]) {
+    if (providerReady(candidate)) return { provider: candidate, privacyFallback: false };
+  }
+
+  // Nothing approved-for-private is configured. The groq gate (llm.ts)
+  // still stands as the hard backstop; the caller runs the AST-only path
+  // with an explicit note instead of a raw failure.
+  return { provider: null, privacyFallback: true };
 }
 
 export function aiEnabled(): boolean {
@@ -71,8 +113,10 @@ function parseDescriptions(text: string): Map<string, string> {
  * and the source is private (unless ALLOW_PRIVATE_ON_GROQ=true).
  */
 export async function describeRoutes(routes: ParsedRoute[], repoPublic: boolean): Promise<DescribeResult> {
-  const provider = activeProviderName();
-  if (!provider) return { descriptions: new Map(), tokensUsed: 0, provider: null, flagged: new Map() };
+  const { provider, privacyFallback } = providerForBatch(repoPublic);
+  if (!provider || privacyFallback) {
+    return { descriptions: new Map(), tokensUsed: 0, provider: null, privacyFallback: true, flagged: new Map() };
+  }
 
   const facts = routes.map((r) => ({
     key: routeKey(r),
@@ -122,6 +166,7 @@ export async function describeRoutes(routes: ParsedRoute[], repoPublic: boolean)
       descriptions,
       tokensUsed: (res.tokensIn ?? 0) + (res.tokensOut ?? 0),
       provider,
+      privacyFallback: false,
       flagged,
     };
   } catch (err) {

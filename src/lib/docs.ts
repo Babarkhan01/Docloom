@@ -33,7 +33,7 @@ export type GenerationCoverage = {
   aiFor?: number;
   aiOf?: number;
   /** AI prose entirely unavailable this run, and why (budget reached, or the LLM failed). */
-  aiSkipped?: "llm-budget" | "llm-unavailable";
+  aiSkipped?: "llm-budget" | "llm-unavailable" | "private-repo-no-approved-provider";
 };
 
 /** Top-of-doc summary: what we parsed / what we couldn't. */
@@ -92,6 +92,11 @@ function coverageNoteLines(coverage: GenerationCoverage): string[] {
   } else if (coverage.aiSkipped === "llm-unavailable") {
     lines.push(
       "> **AI descriptions:** unavailable for this run — the LLM did not respond, so routes keep their JSDoc/source facts only.",
+      "",
+    );
+  } else if (coverage.aiSkipped === "private-repo-no-approved-provider") {
+    lines.push(
+      "> **AI descriptions:** unavailable for this private repository — no AI provider approved for private-source processing is configured on this Docloom deployment, so this document contains the extracted structural facts only. Ask the operator to configure Nebius or Anthropic for private repos.",
       "",
     );
   }
