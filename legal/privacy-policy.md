@@ -21,7 +21,7 @@ By creating an account or otherwise using Docloom (the "Service"), you agree to 
 ### 2.2 Information Collected Automatically
 - **Repository access tokens:** When you connect a GitHub repository, we receive an OAuth access token scoped to the repositories you authorize. This token is encrypted at rest (AES-256-GCM) and is used solely to read repository contents for documentation generation.
 - **Source code content:** To generate documentation, Docloom's parser reads the structure of your code (functions, endpoints, types, comments) from the repositories you connect. Code is parsed programmatically using a deterministic AST (Abstract Syntax Tree) parser — we do not use an AI model to infer code structure, only to write natural-language descriptions of structure that has already been extracted mechanically.
-- **Usage data:** We log basic usage metrics — which repositories are connected, how many documentation generation requests are made per day, and general service interaction data — to enforce plan-based usage quotas (e.g., Free: 5/day, Starter: 25/day, Team: 100/day) and to maintain and improve the Service.
+- **Usage data:** We log basic usage metrics — which repositories are connected, how many documentation generation requests are made per day, and general service interaction data — to enforce plan-based usage quotas (e.g., Free: 5/day, Pro: 25/day, Team: 100/day) and to maintain and improve the Service.
 - **Technical data:** Standard web server logs (IP address, browser type, timestamps) may be collected for security, fraud prevention, and debugging purposes.
 
 ### 2.3 Information From Third Parties
@@ -34,7 +34,8 @@ We use collected information to:
 
 1. Authenticate your identity and maintain your account.
 2. Access and parse the repositories you explicitly connect, in order to generate documentation.
-3. Send parsed code structure (never raw, unparsed repository dumps beyond what's needed) to Anthropic's Claude API to generate human-readable descriptions of your API endpoints and code structure.
+3. Send parsed code structure (never raw, unparsed repository dumps beyond what's needed) to the configured large-language-model provider (e.g. Anthropic's Claude API or Nebius) to generate human-readable descriptions of your API endpoints and code structure.
+   - Code from **private** repositories is sent only to AI providers whose terms permit private-source processing; the provider for public-repo free-tier terms (Groq) never receives private-repo source.
 4. Process payments and manage subscription plans through Dodo Payments.
 5. Enforce usage quotas associated with your plan tier.
 6. Communicate with you about your account, billing, service updates, or in response to support requests.
@@ -45,9 +46,9 @@ We do **not** sell your personal information or your source code to third partie
 
 ## 4. AI Processing Disclosure
 
-Docloom uses Anthropic's Claude API to generate natural-language descriptions of code structures that have already been extracted by our own AST parser. This means:
+Docloom uses a large-language-model provider (e.g. Anthropic's Claude API or Nebius, selected by configuration) to generate natural-language descriptions of code structures that have already been extracted by our own AST parser. This means:
 
-- Code structure (function names, parameter types, endpoint paths, existing comments) is sent to Anthropic's API for the sole purpose of generating documentation text.
+- Code structure (function names, parameter types, endpoint paths, existing comments) is sent to the selected provider's API for the sole purpose of generating documentation text. Private-repository code is only sent to providers whose terms permit private-source processing.
 - Docloom is designed to avoid fabrication: where source code does not contain enough information to describe a behavior, the generated documentation will state that the detail is "not documented in source" rather than inventing an explanation.
 - We do not use your code to train our own models. Please refer to Anthropic's own data usage and retention policies for information on how the Claude API handles submitted data at the API level.
 
@@ -55,7 +56,7 @@ Docloom uses Anthropic's Claude API to generate natural-language descriptions of
 
 We share information only in the following circumstances:
 
-- **Service providers:** With GitHub (for repository access), Anthropic (for AI-generated descriptions), Dodo Payments (for billing), and Cloudflare (for hosting and infrastructure) — each of which processes data only to the extent necessary to provide their respective service to us.
+- **Service providers:** With GitHub (for repository access), the configured AI provider (for AI-generated descriptions — e.g. Anthropic or Nebius), Dodo Payments (for billing), and Cloudflare (for hosting and infrastructure) — each of which processes data only to the extent necessary to provide their respective service to us.
 - **Legal requirements:** If required to do so by law, subpoena, or other legal process, or if we believe disclosure is necessary to protect our rights, your safety, or the safety of others.
 - **Business transfers:** In connection with a merger, acquisition, or sale of assets, subject to standard confidentiality obligations.
 

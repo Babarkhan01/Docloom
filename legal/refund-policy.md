@@ -11,7 +11,7 @@ This Refund Policy explains how refunds are handled for paid subscriptions to Do
 
 ## 2. Subscription Plans Covered
 
-This policy applies to all paid subscription tiers offered by Docloom, including but not limited to the Starter and Team plans, billed on a recurring monthly basis.
+This policy applies to all paid subscription tiers offered by Docloom — the **Pro ($29/month)** and **Team ($89/month)** plans — billed on a recurring monthly basis.
 
 ## 3. Free Trial / Free Tier
 
@@ -44,7 +44,9 @@ Refund requests are typically reviewed and responded to within 5 business days. 
 
 ## 6. Cancellation
 
-Cancelling your subscription stops future billing but does not, by itself, trigger a refund for the current billing period unless your cancellation falls within the eligibility criteria in Section 4. You may continue to use your current plan's features until the end of the billing period you've already paid for.
+Cancelling your subscription stops future billing but does not, by itself, trigger a refund for the current billing period unless your cancellation falls within the eligibility criteria in Section 4. You may continue to use your current plan's features until the end of the billing period you've already paid for; the plan then drops to the Free tier.
+
+Exception: when a refund is issued, or a chargeback is honored by your payment provider, plan access is revoked **immediately** — not until the end of the paid period.
 
 ## 7. Chargebacks
 

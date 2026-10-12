@@ -39,11 +39,13 @@ Docloom is designed to minimize inaccuracies by using a deterministic code parse
 
 ## 7. Subscription Plans and Billing
 
-- Docloom offers multiple subscription tiers (e.g., Free, Starter, Team), each with associated usage quotas (documentation generation requests per day) as described on our pricing page.
-- Paid subscriptions are billed on a recurring basis (monthly, unless otherwise stated) through **Dodo Payments**, which acts as the merchant of record for all transactions. Your payment relationship for billing disputes, refunds, and chargebacks is governed by Dodo Payments' own terms in addition to these Terms.
-- Subscriptions automatically renew at the end of each billing cycle unless cancelled prior to the renewal date.
+- Docloom offers multiple subscription tiers — **Free**, **Pro ($29/month)**, and **Team ($89/month)** — each with associated usage quotas (documentation generation requests per day): Free 5/day, Pro 25/day, Team 100/day.
+- Paid subscriptions are billed on a recurring **monthly** basis through **Dodo Payments**, which acts as the merchant of record for all transactions. Your payment relationship for billing disputes, refunds, and chargebacks is governed by Dodo Payments' own terms in addition to these Terms.
+- Subscriptions automatically renew at the end of each monthly billing cycle unless cancelled prior to the renewal date.
+- **Cancellation:** if you cancel, your plan remains active until the end of the billing period you have already paid for, and then drops to the Free tier. Future billing stops at cancellation.
+- **Refunds and chargebacks:** where Dodo Payments issues a refund or a chargeback is honored, the corresponding plan access is revoked **immediately**, without a wait until the period's end.
 - **Refunds** are provided at our discretion, except where required by applicable law. To request a refund, contact us using the details in Section 15.
-- If a payment fails, your account may enter a grace period (currently 7 days) during which your existing plan remains active before being downgraded to the Free tier.
+- If a payment fails, your account may enter a grace period (currently 7 days) during which your existing plan remains active before being downgraded to the Free tier. Recovers within the grace window keep the plan; terminal failures (cancelled, expired, failed) drop it to Free.
 - We reserve the right to change subscription pricing with reasonable advance notice. Continued use of a paid plan after a price change takes effect constitutes acceptance of the new price.
 
 ## 8. Acceptable Use
