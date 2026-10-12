@@ -18,7 +18,7 @@ type GateError = {
 
 const PLAN_COPY = {
   pro: { label: "Pro", price: "$29/mo" },
-  team: { label: "Team", price: "$49/mo" },
+  team: { label: "Team", price: "$89/mo" },
 } as const;
 
 /** Fetch the connectable repos. A plain function (no setState) so both the
@@ -201,7 +201,7 @@ export function ConnectRepoModal({
             {plan === "free" ? (
               <div className="mb-3 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 text-xs text-zinc-400">
                 <span className="font-medium text-zinc-300">Free plan — 1 public repo.</span>{" "}
-                Starter ($19/mo) unlocks private repos, up to 5 repos, auto-regenerate on
+                Pro ($29/mo) unlocks private repos, up to 5 repos, auto-regenerate on
                 every merge, and removes Docloom branding from your docs.{" "}
                 <button
                   type="button"
@@ -267,7 +267,7 @@ export function ConnectRepoModal({
                           <p className="mt-0.5 font-mono text-[11px] text-zinc-500">
                             {r.isPrivate ? "private" : "public"} · default: {r.defaultBranch}
                             {privateLocked ? (
-                              <span className="ml-1 text-zinc-400">· Starter feature</span>
+                              <span className="ml-1 text-zinc-400">· Pro feature</span>
                             ) : null}
                           </p>
                         </div>
@@ -277,7 +277,7 @@ export function ConnectRepoModal({
                           onClick={() => connect(r.fullName)}
                           title={
                             privateLocked
-                              ? "Private repos are available on Starter — upgrade to connect this repo."
+                              ? "Private repos are available on Pro — upgrade to connect this repo."
                               : undefined
                           }
                           className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${

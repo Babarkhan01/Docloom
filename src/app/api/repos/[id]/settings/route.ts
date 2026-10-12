@@ -46,7 +46,7 @@ async function settingsHandler(
         error: "upgrade_required",
         upgradeTo: "pro",
         message:
-          "Auto-regenerate on every merge is a Starter feature. Upgrade to Starter ($19/mo) to keep your docs fresh automatically — each merge produces a draft for your approval, and nothing is ever published without you.",
+          "Auto-regenerate on every merge is a Pro feature. Upgrade to Pro ($29/mo) to keep your docs fresh automatically — each merge produces a draft for your approval, and nothing is ever published without you.",
       },
       { status: 403 },
     );

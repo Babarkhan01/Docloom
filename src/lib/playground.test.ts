@@ -215,12 +215,12 @@ function fakeIo(opts: {
 describe("runPlaygroundGeneration", () => {
   const limits = playgroundLimits();
 
-  it("refuses private repos with the Starter pitch", async () => {
+  it("refuses private repos with the Pro pitch", async () => {
     const io = fakeIo({ meta: { isPrivate: true }, entries: [] });
     const res = await runPlaygroundGeneration({ owner: "o", repo: "r", ref: null }, io, limits);
     expect(res).toMatchObject({ status: 403, error: "repo_not_public" });
     expect(res).toHaveProperty("message");
-    if ("message" in res) expect(res.message).toContain("Starter");
+    if ("message" in res) expect(res.message).toContain("Pro plan");
   });
 
   it("refuses oversized repos before fetching any blobs", async () => {
@@ -332,6 +332,7 @@ describe("runPlaygroundGeneration AI wiring", () => {
         tokensOut: 100,
         tokensUsed: 200,
         provider: null,
+        privacyFallback: false,
         flagged: new Map(),
       };
     };

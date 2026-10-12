@@ -66,7 +66,7 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Daily cap for this user — plan-aware (Free 5 / Starter 25 / Team 100) via billing.ts. */
+/** Daily cap for this user — plan-aware (Free 5 / Pro 25 / Team 100) via billing.ts. */
 export async function quotaStateFor(userId: string) {
   const [row] = await db
     .select()
@@ -386,11 +386,21 @@ export async function executePipeline(
     let descriptions = new Map<string, string>();
     let tokensUsed = 0;
     if (routes.length > 0 && io.aiEnabled()) {
-      // repoPublic gate: the groq provider refuses private source unless
-      // ALLOW_PRIVATE_ON_GROQ=true; other providers accept either.
+      // repoPublic routes the provider: private repos go to a provider whose
+      // terms approve private-source processing (Nebius by preference). When
+      // none is configured, the map comes back EMPTY with privacyFallback —
+      // the run still succeeds with pure-AST docs and a visible, honest note
+      // below (never silent degradation, never a hard failure for a paying
+      // Pro/Team user).
       const result = await io.describeRoutes(routes, !repo.isPrivate);
       descriptions = result.descriptions;
       tokensUsed = result.tokensUsed;
+      if (result.privacyFallback) {
+        coverage = {
+          ...(coverage ?? { filesSkipped: 0, fileCap: opts.maxFiles }),
+          aiSkipped: "private-repo-no-approved-provider",
+        };
+      }
     }
 
     // 4. Markdown from facts + prose; stored as a draft until published.

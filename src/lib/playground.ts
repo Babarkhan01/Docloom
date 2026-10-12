@@ -17,7 +17,7 @@ import type { ParsedRoute } from "./route-parser";
  *
  * - Public data only, through GitHub's public REST API — never the GitHub App
  *   installation tokens, never OAuth. Private repos are refused with the
- *   Starter pitch instead.
+ *   Pro pitch instead.
  * - No DB: the pipeline is the same pure parser + markdown builder the
  *   demo scripts prove offline (scripts/generate-demo-docs.mjs). Nothing is
  *   persisted — source is processed in memory and dropped (project principle).
@@ -453,7 +453,7 @@ export async function runPlaygroundGeneration(
     return {
       status: 403,
       error: "repo_not_public",
-      message: `${meta.fullName} is a private repository. The playground only handles public repos — sign in and connect it instead; private repos are exactly what the Starter plan is for.`,
+      message: `${meta.fullName} is a private repository. The playground only handles public repos — sign in and connect it instead; private repos are exactly what the Pro plan is for.`,
     };
   }
   const ref = input.ref ?? meta.defaultBranch;

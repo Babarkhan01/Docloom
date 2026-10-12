@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { UpgradeButton } from "./upgrade-button";
 
 /**
- * Per-repo auto-regenerate toggle (Phase 2). Starter/Team only: on a free
+ * Per-repo auto-regenerate toggle (Phase 2). Pro/Team only: on a free
  * plan the switch is locked with the upgrade prompt instead of letting the
  * user flip it and hit a 403. The API re-checks the plan authoritatively.
  */
@@ -72,7 +72,7 @@ export function AutoRegenToggle({
       </div>
       {locked ? (
         <p className="flex items-center gap-2 text-right font-mono text-[11px] text-zinc-500">
-          Starter feature — unlocks drafts on every merge
+          Pro feature — unlocks drafts on every merge
           <UpgradeButton />
         </p>
       ) : (
