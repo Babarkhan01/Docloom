@@ -316,6 +316,29 @@ describe("POST /api/webhooks/dodo", () => {
     );
   });
 
+  it("subscription.updated with status=expired downgrades immediately (term end)", async () => {
+    dbMock.users = [user({ plan: "team", dodoSubscriptionId: "sub_t" })];
+    dodoMock.listCustomerSubscriptions.mockResolvedValue([]);
+    const body = JSON.stringify({
+      type: "subscription.updated",
+      data: {
+        subscription_id: "sub_t",
+        status: "expired",
+        customer_id: "cus_1",
+        product_id: "prod_team",
+        // Even a valid future next_billing_date must NOT grant borrowed access:
+        next_billing_date: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+    });
+    const res = await POST(signedRequest(body));
+    const json = (await res.json()) as { handled?: boolean; note?: string };
+    expect(json.handled).toBe(true);
+    expect(json.note).toContain("downgraded to free");
+    const patch = dbMock.updates.at(-1)!.patch;
+    expect(patch.plan).toBe("free");
+    expect(patch.dodoGraceUntil).toBeNull();
+  });
+
   it("dispute (chargeback-like) revokes access IMMEDIATELY — no grace", async () => {
     dbMock.users = [user({ plan: "pro", dodoGraceUntil: new Date(Date.now() + 86400_000) })];
     const body = JSON.stringify({

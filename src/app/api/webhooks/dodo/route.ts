@@ -228,6 +228,15 @@ async function applySubscriptionState(opts: {
           const note = await keepBestSurvivor(userId, sub.subscription_id, survivors);
           return { handled: true, note: `${status} — ${note}` };
         }
+        if (status === "expired") {
+          // Expiry is Dodo's own term-end decision — same as the dedicated
+          // subscription.expired event: free immediately, no borrowed window.
+          await db
+            .update(users)
+            .set({ dodoSubscriptionStatus: "expired", dodoGraceUntil: null, plan: "free", updatedAt: new Date() })
+            .where(eq(users.id, userId));
+          return { handled: true, note: "expired (term end) — downgraded to free" };
+        }
         // Survivor check first, then the paid-period promise: the plan stays
         // honoured until the end of the period already paid for (Terms §7),
         // by borrowing dodoGraceUntil as the paid-through timestamp — plan
@@ -242,7 +251,7 @@ async function applySubscriptionState(opts: {
             updatedAt: new Date(),
           })
           .where(eq(users.id, userId));
-        return { handled: true, note: `${status} — plan kept until the paid period ends` };
+        return { handled: true, note: "cancelled — plan kept until the paid period ends" };
       }
       return { handled: false, note: `subscription.updated with unhandled status ${status}` };
     }
