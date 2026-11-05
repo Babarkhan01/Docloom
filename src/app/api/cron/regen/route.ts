@@ -11,12 +11,21 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/cron/regen — cron fallback for queued auto-regenerate runs.
  *
- * Delivery: an external 5-minute scheduler (GitHub Actions cron, cron-job.org,
- * UptimeRobot, …) GETs this route with `Authorization: Bearer $DOCLOOM_CRON_SECRET`.
- * Cloudflare cron triggers cannot drive an OpenNext worker (the generated
- * worker exports no scheduled() handler), so the pinger is the transport.
- * The route needs a deploy before the pinger can work — deploying is a
- * deliberate, separate step.
+ * Delivery: an external scheduler (GitHub Actions cron, cron-job.org, …) GETs
+ * this route with `Authorization: Bearer $DOCLOOM_CRON_SECRET`. Cloudflare
+ * cron triggers cannot drive an OpenNext worker (the generated worker exports
+ * no scheduled() handler), so the pinger is the transport. The route needs a
+ * deploy before the pinger can work — deploying is a deliberate, separate
+ * step.
+ *
+ * Run it every 6 hours, not every 5 minutes. Every tick queries the database
+ * (re-queue sweep + queued select) even when there is nothing to do, and Neon
+ * suspends compute only after ~5 idle minutes — a 5-minute pinger therefore
+ * keeps the database awake 24/7 and burns the monthly compute quota. At 6
+ * hours a stranded run just waits until the next tick, which is acceptable:
+ * this is a recovery path, not the normal one (the GitHub webhook drives runs
+ * immediately via waitUntil; this only catches a dead isolate or a failed
+ * waitUntil). Six-hourly ticks cost ~4 wake-ups/day.
  *
  * Two jobs:
  * 1. Re-drive `queued` runs stranded by the debounce window (or by a failed

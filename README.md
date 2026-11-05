@@ -188,10 +188,15 @@ Follows the Technical Architecture & Security Spec. Highlights:
   generation runs, Dodo webhook failures (bad signature, processing errors),
   failed account deletions. Fire-and-forget and silent when unset — one env
   var, no SDK.
-- **Health check** — `GET /api/health` runs a bounded (`3s`) `select 1` and
-  returns `200 {status:"ok"}` or `503 {status:"degraded"}`. Point
-  UptimeRobot/Better Stack at it (plain GET, no auth); robots.txt already
-  disallows `/api` for crawlers.
+- **Health check** — `GET /api/health` is DB-free by default: it returns
+  `200 {status:"ok",db:"skipped"}` without any query, so monitoring never
+  wakes Neon's suspended compute (a `select 1` per ping used to keep the free
+  plan's compute awake around the clock). Point UptimeRobot/Better Stack at
+  it (plain GET, no auth); robots.txt already disallows `/api` for crawlers.
+  The bounded (`3s`) DB probe runs only with
+  `?deep=1` plus `Authorization: Bearer $DOCLOOM_CRON_SECRET` (401 otherwise,
+  so strangers cannot wake the DB); a failed probe returns
+  `503 {status:"degraded",db:"error"}`.
 - **Account deletion** — self-serve in the dashboard's Danger zone
   (type-DELETE-to-confirm): best-effort Dodo subscription cancel
   (`PATCH /subscriptions/{id}`, failures are reported to the user and
